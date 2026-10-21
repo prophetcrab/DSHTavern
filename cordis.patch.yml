@@ -1,0 +1,38 @@
+# DSHTavern bundle:
+# - the host plugin keeps the tavern workspace marker, Web-panel routes, and
+#   the workspace-level prompt assembly (D005) registered per tavern agent;
+# - the remaining rows declare the internal tavern presets. They mount no
+#   prompt rows: host assembly is the sole system-prompt source, and the
+#   presets give tavern sessions a clean scope without tools/persona. They are
+#   hidden from the global preset roster and bound automatically by workspace
+#   mode (role-play / novel). `tavern` is the legacy id kept for old sessions.
+- insert:
+    - id: dshtavern
+      name: dshtavern
+- insert:
+    - id: preset-tavern
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: tavern
+        name: 酒馆（旧）
+        description: 旧版酒馆会话的兼容 preset，不再用于新会话。
+        order: 10
+        plugins: []
+- insert:
+    - id: preset-tavern-rp
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: tavern-rp
+        name: 酒馆 · 角色扮演
+        description: 使用该酒馆工作区编排的角色扮演提示词。
+        order: 11
+        plugins: []
+- insert:
+    - id: preset-tavern-novel
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: tavern-novel
+        name: 酒馆 · 小说
+        description: 小说模式（提示词块待实现）。
+        order: 12
+        plugins: []
