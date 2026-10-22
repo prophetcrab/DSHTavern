@@ -8,6 +8,7 @@
  */
 import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
+import { fetchCharacterCards } from './characters.js'
 import { CLASS } from './styles.js'
 
 /** Per-role model selection; both fields are present together. */
@@ -29,6 +30,14 @@ export interface AgentConfigView {
   readonly rotateSpeakers: boolean
   readonly honorPlayerMention: boolean
   readonly unknownSpeaker: 'none' | 'first'
+  /** Reply budget shared by every call; absent means no cap. */
+  readonly maxReplyChars?: number
+  /** Director reply budget; overrides the shared one. */
+  readonly directorMaxReplyChars?: number
+  /** Per-character reply budgets keyed by card id; overrides the shared one. */
+  readonly characterMaxReplyChars?: Readonly<Record<string, number>>
+  /** Tokens added to the cap so the model can think without eating the whole reply. */
+  readonly reasoningReserveTokens?: number
   readonly directorModel?: AgentModelChoiceView
   readonly characterModel?: AgentModelChoiceView
 }
@@ -55,9 +64,14 @@ export const AGENT_LIMITS = {
   loreMaxEntries: { min: 1, max: 20, step: 1, unit: '条' },
   loreMaxChars: { min: 200, max: 40_000, step: 100, unit: '字' },
   playerInputMax: { min: 200, max: 20_000, step: 100, unit: '字' },
+  maxReplyChars: { min: 20, max: 8000, step: 20, unit: '字' },
+  reasoningReserveTokens: { min: 0, max: 16_000, step: 64, unit: 'token' },
 } as const
 
 type NumericField = keyof typeof AGENT_LIMITS
+
+/** Numeric fields that are always present in the config (the reply budgets are optional). */
+type RequiredNumericField = Exclude<NumericField, 'maxReplyChars' | 'reasoningReserveTokens'>
 
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
@@ -285,6 +299,8 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
   const [saved, setSaved] = useState<AgentConfigView | null>(null)
   const [defaults, setDefaults] = useState<AgentConfigView | null>(null)
   const [catalog, setCatalog] = useState<readonly ModelCatalogEntry[]>([])
+  /** Cards in this workspace, for the per-character reply budgets. */
+  const [characters, setCharacters] = useState<readonly { id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -294,14 +310,16 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
     setLoading(true)
     setError(null)
     try {
-      const [snapshot, providers] = await Promise.all([
+      const [snapshot, providers, cards] = await Promise.all([
         fetchAgentConfig(props.workspaceId),
         fetchModelCatalog().catch(() => [] as readonly ModelCatalogEntry[]),
+        fetchCharacterCards(props.workspaceId).catch(() => []),
       ])
       setConfig(snapshot.config)
       setSaved(snapshot.config)
       setDefaults(snapshot.defaults)
       setCatalog(providers)
+      setCharacters(cards.map(card => ({ id: card.id, name: card.name })))
     } catch (cause) {
       setError(errorText(cause))
     } finally {
@@ -349,7 +367,9 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
   const dirty = JSON.stringify(config) !== JSON.stringify(saved)
   const differsFromDefault = JSON.stringify(config) !== JSON.stringify(defaults)
   const disabled = saving
-  const num = (field: NumericField, label: string, hint: string): ReactElement =>
+  // Only the always-present numeric fields go through this helper; the
+  // optional reply budgets have their own row with a clearable empty state.
+  const num = (field: RequiredNumericField, label: string, hint: string): ReactElement =>
     createElement(NumberRow, {
       key: field,
       field,
@@ -459,5 +479,202 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
         onChange: choice => update(choice === undefined
           ? { characterModel: undefined }
           : { characterModel: choice }),
-      })))
+      })),
+
+    createElement(ReplyBudgetGroup, {
+      config,
+      characters,
+      disabled,
+      onChange: patch => update(patch),
+    }))
 }
+
+/**
+ * Reply-length controls: one shared budget plus per-role and per-character
+ * overrides.
+ *
+ * The budget is expressed in characters because that is what an author counts;
+ * the host converts it to the provider's token cap.
+ */
+function ReplyBudgetGroup(props: {
+  readonly config: AgentConfigView
+  readonly characters: readonly { id: string; name: string }[]
+  readonly disabled: boolean
+  readonly onChange: (patch: Partial<AgentConfigView>) => void
+}): ReactElement {
+  const { config, disabled } = props
+  const shared = config.maxReplyChars
+  const bounds = AGENT_LIMITS.maxReplyChars
+  const overrides = config.characterMaxReplyChars ?? {}
+  const overriddenCount = Object.keys(overrides).length
+  const clearAll = (): void => {
+    props.onChange({
+      maxReplyChars: undefined,
+      directorMaxReplyChars: undefined,
+      characterMaxReplyChars: undefined,
+    })
+  }
+  const setOverride = (id: string, value: number | undefined): void => {
+    const next = { ...overrides }
+    if (value === undefined) delete next[id]
+    else next[id] = value
+    props.onChange({
+      characterMaxReplyChars: Object.keys(next).length === 0 ? undefined : next,
+    })
+  }
+
+  return createElement('div', { className: 'dshtavern-agent-group' },
+    createElement('div', { className: 'dshtavern-agent-group-title' }, '回复长度'),
+    createElement('div', { className: 'dshtavern-agent-group-note' },
+      `留空表示不限制，由模型自身决定。字数按约 ${TOKENS_PER_CHAR} token/字换算成模型的输出上限。`),
+
+    createElement('label', { className: 'dshtavern-agent-row' },
+      createElement('span', { className: 'dshtavern-agent-row-text' },
+        createElement('span', { className: 'dshtavern-agent-label' }, '统一回复长度'),
+        createElement('span', { className: 'dshtavern-agent-hint' },
+          '所有调用的默认上限；下面的逐角色设置会覆盖它。')),
+      createElement('span', { className: 'dshtavern-agent-input-wrap' },
+        createElement('input', {
+          className: 'dshtavern-agent-input',
+          type: 'number',
+          min: bounds.min,
+          max: bounds.max,
+          step: bounds.step,
+          placeholder: '不限',
+          value: shared === undefined ? '' : String(shared),
+          disabled,
+          onChange: (event: { target: { value: string } }) => {
+            const raw = event.target.value.trim()
+            if (raw.length === 0) {
+              props.onChange({ maxReplyChars: undefined })
+              return
+            }
+            const parsed = Number(raw)
+            if (!Number.isFinite(parsed)) return
+            props.onChange({
+              maxReplyChars: Math.min(bounds.max, Math.max(bounds.min, Math.round(parsed))),
+            })
+          },
+        }),
+        createElement('span', { className: 'dshtavern-agent-unit' }, bounds.unit))),
+
+    createElement('div', { className: 'dshtavern-agent-quick' },
+      createElement('span', { className: 'dshtavern-agent-hint' }, '一键设置：'),
+      QUICK_SIZES.map(size => createElement('button', {
+        key: size,
+        type: 'button',
+        className: 'dshtavern-button dshtavern-agent-quick-button',
+        'data-active': shared === size ? 'true' : 'false',
+        disabled,
+        onClick: () => props.onChange({ maxReplyChars: size }),
+      }, `${size} 字`)),
+      createElement('button', {
+        type: 'button',
+        className: 'dshtavern-button dshtavern-agent-quick-button',
+        'data-active': shared === undefined ? 'true' : 'false',
+        disabled,
+        onClick: () => { clearAll() },
+      }, '不限')),
+
+    createElement('label', { className: 'dshtavern-agent-row' },
+      createElement('span', { className: 'dshtavern-agent-row-text' },
+        createElement('span', { className: 'dshtavern-agent-label' }, '导演回复长度'),
+        createElement('span', { className: 'dshtavern-agent-hint' },
+          '覆盖统一值。导演只输出 JSON 指令，通常可以更短。')),
+      createElement('span', { className: 'dshtavern-agent-input-wrap' },
+        createElement('input', {
+          className: 'dshtavern-agent-input',
+          type: 'number',
+          min: bounds.min,
+          max: bounds.max,
+          step: bounds.step,
+          placeholder: shared === undefined ? '不限' : `同统一 ${shared}`,
+          value: config.directorMaxReplyChars === undefined ? '' : String(config.directorMaxReplyChars),
+          disabled,
+          onChange: (event: { target: { value: string } }) => {
+            const raw = event.target.value.trim()
+            if (raw.length === 0) {
+              props.onChange({ directorMaxReplyChars: undefined })
+              return
+            }
+            const parsed = Number(raw)
+            if (!Number.isFinite(parsed)) return
+            props.onChange({
+              directorMaxReplyChars: Math.min(bounds.max, Math.max(bounds.min, Math.round(parsed))),
+            })
+          },
+        }),
+        createElement('span', { className: 'dshtavern-agent-unit' }, bounds.unit))),
+
+    createElement('div', { className: 'dshtavern-agent-subhead' },
+      createElement('span', { className: 'dshtavern-agent-label' }, '逐角色回复长度'),
+      overriddenCount === 0
+        ? createElement('span', { className: 'dshtavern-agent-hint' }, '全部沿用统一值')
+        : createElement('span', { className: 'dshtavern-agent-hint' }, `${overriddenCount} 个角色单独设置`)),    props.characters.length === 0
+      ? createElement('div', { className: 'dshtavern-agent-hint' }, '这个工作区还没有角色卡。')
+      : createElement('div', { className: 'dshtavern-agent-chars' },
+        props.characters.map(character => createElement('label', {
+          key: character.id,
+          className: 'dshtavern-agent-char-row',
+        },
+        createElement('span', { className: 'dshtavern-agent-char-name', title: character.id }, character.name),
+        createElement('input', {
+          className: 'dshtavern-agent-input dshtavern-agent-char-input',
+          type: 'number',
+          min: bounds.min,
+          max: bounds.max,
+          step: bounds.step,
+          placeholder: shared === undefined ? '不限' : String(shared),
+          value: overrides[character.id] === undefined ? '' : String(overrides[character.id]),
+          disabled,
+          onChange: (event: { target: { value: string } }) => {
+            const raw = event.target.value.trim()
+            if (raw.length === 0) {
+              setOverride(character.id, undefined)
+              return
+            }
+            const parsed = Number(raw)
+            if (!Number.isFinite(parsed)) return
+            setOverride(character.id, Math.min(bounds.max, Math.max(bounds.min, Math.round(parsed))))
+          },
+        }),
+        createElement('span', { className: 'dshtavern-agent-unit' }, bounds.unit)))),
+
+    createElement('label', { className: 'dshtavern-agent-row' },
+      createElement('span', { className: 'dshtavern-agent-row-text' },
+        createElement('span', { className: 'dshtavern-agent-label' }, '推理预留'),
+        createElement('span', { className: 'dshtavern-agent-hint' },
+          `模型把思考与正文算在同一个输出上限里。留出这段 token，字数预算才真正用在正文上；默认 ${DEFAULT_RESERVE}。`)),
+      createElement('span', { className: 'dshtavern-agent-input-wrap' },
+        createElement('input', {
+          className: 'dshtavern-agent-input',
+          type: 'number',
+          min: AGENT_LIMITS.reasoningReserveTokens.min,
+          max: AGENT_LIMITS.reasoningReserveTokens.max,
+          step: AGENT_LIMITS.reasoningReserveTokens.step,
+          placeholder: String(DEFAULT_RESERVE),
+          value: config.reasoningReserveTokens === undefined ? '' : String(config.reasoningReserveTokens),
+          disabled,
+          onChange: (event: { target: { value: string } }) => {
+            const raw = event.target.value.trim()
+            if (raw.length === 0) {
+              props.onChange({ reasoningReserveTokens: undefined })
+              return
+            }
+            const parsed = Number(raw)
+            if (!Number.isFinite(parsed)) return
+            const { min, max } = AGENT_LIMITS.reasoningReserveTokens
+            props.onChange({ reasoningReserveTokens: Math.min(max, Math.max(min, Math.round(parsed))) })
+          },
+        }),
+        createElement('span', { className: 'dshtavern-agent-unit' }, AGENT_LIMITS.reasoningReserveTokens.unit))))
+}
+
+/** One-click budgets offered above the shared reply-length field. */
+const QUICK_SIZES = [120, 240, 400, 800] as const
+
+/** Tokens per Chinese character, mirrored from the host for the panel's hint. */
+const TOKENS_PER_CHAR = 0.6
+
+/** Reasoning headroom default, mirrored from the host so the placeholder matches. */
+const DEFAULT_RESERVE = 512

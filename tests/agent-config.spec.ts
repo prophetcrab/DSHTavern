@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   AGENT_CONFIG_LIMITS,
   AgentConfigInvalidError,
+  DEFAULT_REASONING_RESERVE,
   defaultAgentConfig,
   normalizeAgentConfig,
+  replyBudgetChars,
+  replyCapTokens,
+  tokensForChars,
 } from '../src/agent-config.ts'
 import { mentionedSpeaker } from '../src/orchestrator.ts'
 
@@ -114,5 +118,73 @@ describe('mentionedSpeaker', () => {
 
   it('ignores an empty utterance', () => {
     expect(mentionedSpeaker('', CAST)).toBeUndefined()
+  })
+})
+
+describe('reply budgets', () => {
+  const bounds = AGENT_CONFIG_LIMITS.maxReplyChars
+
+  it('is absent by default, leaving the model its own limit', () => {
+    const config = defaultAgentConfig()
+    expect(config.maxReplyChars).toBeUndefined()
+    expect(config.directorMaxReplyChars).toBeUndefined()
+    expect(config.characterMaxReplyChars).toBeUndefined()
+    expect(replyBudgetChars(config, 'director')).toBeUndefined()
+    expect(replyBudgetChars(config, 'character', 'card-1')).toBeUndefined()
+  })
+
+  it('applies the shared budget to both roles', () => {
+    const config = normalizeAgentConfig({ maxReplyChars: 300 })
+    expect(replyBudgetChars(config, 'director')).toBe(300)
+    expect(replyBudgetChars(config, 'character', 'card-1')).toBe(300)
+  })
+
+  it('prefers the per-role and per-character overrides', () => {
+    const config = normalizeAgentConfig({
+      maxReplyChars: 300,
+      directorMaxReplyChars: 100,
+      characterMaxReplyChars: { 'card-1': 500 },
+    })
+    expect(replyBudgetChars(config, 'director')).toBe(100)
+    expect(replyBudgetChars(config, 'character', 'card-1')).toBe(500)
+    // A card with no override falls back to the shared budget.
+    expect(replyBudgetChars(config, 'character', 'card-2')).toBe(300)
+  })
+
+  it('accepts both bounds and rejects a value outside them', () => {
+    expect(normalizeAgentConfig({ maxReplyChars: bounds.min }).maxReplyChars).toBe(bounds.min)
+    expect(normalizeAgentConfig({ maxReplyChars: bounds.max }).maxReplyChars).toBe(bounds.max)
+    expect(() => normalizeAgentConfig({ maxReplyChars: bounds.max + 1 })).toThrow(AgentConfigInvalidError)
+    expect(() => normalizeAgentConfig({ maxReplyChars: bounds.min - 1 })).toThrow(AgentConfigInvalidError)
+  })
+
+  it('rejects a malformed per-character map', () => {
+    expect(() => normalizeAgentConfig({ characterMaxReplyChars: [1, 2] })).toThrow('必须是')
+    expect(() => normalizeAgentConfig({ characterMaxReplyChars: { 'card-1': 'big' } })).toThrow(AgentConfigInvalidError)
+  })
+
+  it('drops an empty per-character map instead of storing it', () => {
+    expect(normalizeAgentConfig({ characterMaxReplyChars: {} }).characterMaxReplyChars).toBeUndefined()
+  })
+
+  it('converts characters to the provider token cap', () => {
+    expect(tokensForChars(400)).toBe(240)
+    expect(tokensForChars(100)).toBe(60)
+    // Never zero: a zero cap would be rejected by the loop.
+    expect(tokensForChars(1)).toBe(1)
+  })
+
+  it('adds reasoning headroom so thinking cannot consume the whole reply', () => {
+    // Regression: a 240-token cap at max effort came back as 240 output tokens
+    // with zero visible text, because the model spent it all thinking.
+    expect(replyCapTokens(400, undefined)).toBe(240 + DEFAULT_REASONING_RESERVE)
+    expect(replyCapTokens(400, 0)).toBe(240)
+    expect(replyCapTokens(400, 1024)).toBe(1264)
+  })
+
+  it('stores a reasoning reserve when given one', () => {
+    expect(normalizeAgentConfig({ reasoningReserveTokens: 1024 }).reasoningReserveTokens).toBe(1024)
+    expect(normalizeAgentConfig({}).reasoningReserveTokens).toBeUndefined()
+    expect(() => normalizeAgentConfig({ reasoningReserveTokens: -1 })).toThrow(AgentConfigInvalidError)
   })
 })

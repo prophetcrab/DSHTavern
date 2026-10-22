@@ -35,6 +35,25 @@ export interface AgentModelChoice {
 /** What the director's unresolvable speaker reference falls back to. */
 export type UnknownSpeakerPolicy = 'none' | 'first'
 
+/**
+ * Approximate tokens per Chinese character.
+ *
+ * DeepSeek's tokenizer spends about 0.6 token per Chinese character, so a
+ * character budget is divided by this to get the enforced `maxTokens`. The
+ * figure is an approximation on purpose: the panel speaks in characters because
+ * that is what an author counts, and the provider's cap is in tokens.
+ */
+export const TOKENS_PER_CHAR = 0.6
+
+/**
+ * Convert a character budget to the token cap handed to the provider.
+ * @param chars - budget in characters.
+ * @returns the token cap, at least 1.
+ */
+export function tokensForChars(chars: number): number {
+  return Math.max(1, Math.round(chars * TOKENS_PER_CHAR))
+}
+
 /** One workspace's agent orchestration settings. */
 export interface TavernAgentConfig {
   readonly schema: number
@@ -56,6 +75,25 @@ export interface TavernAgentConfig {
   readonly honorPlayerMention: boolean
   /** Fallback when the director names someone who is not in the cast. */
   readonly unknownSpeaker: UnknownSpeakerPolicy
+  /**
+   * Reply budget in characters for every call that has no override.
+   *
+   * Absent means the adapter's own default: the orchestrator sends no
+   * `maxTokens`, so the provider applies its model limit.
+   */
+  readonly maxReplyChars?: number
+  /** Director reply budget in characters; overrides {@link maxReplyChars}. */
+  readonly directorMaxReplyChars?: number
+  /** Per-character reply budgets, keyed by card id; overrides {@link maxReplyChars}. */
+  readonly characterMaxReplyChars?: Readonly<Record<string, number>>
+  /**
+   * Tokens added to a reply cap to leave room for the model's reasoning.
+   *
+   * The provider's `max_tokens` bounds thinking and answer together, so a cap
+   * that only covers the wanted characters leaves a reasoning model with no
+   * room to answer at all. Defaults to {@link DEFAULT_REASONING_RESERVE}.
+   */
+  readonly reasoningReserveTokens?: number
   /** Director model; omitted follows the session's model. */
   readonly directorModel?: AgentModelChoice
   /** Character model; omitted follows the session's model. */
@@ -70,7 +108,19 @@ export const AGENT_CONFIG_LIMITS = {
   loreMaxEntries: { min: 1, max: 20 },
   loreMaxChars: { min: 200, max: 40_000 },
   playerInputMax: { min: 200, max: 20_000 },
+  maxReplyChars: { min: 20, max: 8000 },
+  reasoningReserveTokens: { min: 0, max: 16_000 },
 } as const
+
+/**
+ * Default reasoning headroom added to a reply cap.
+ *
+ * Observed on a reasoning model at the highest effort: a 240-token cap came
+ * back as 240 output tokens with zero visible text, because thinking consumed
+ * the whole allowance. 512 leaves room for a typical reasoning pass and still
+ * lets the character budget mean what it says.
+ */
+export const DEFAULT_REASONING_RESERVE = 512
 
 /** A stored config is structurally invalid. */
 export class AgentConfigInvalidError extends Error {
@@ -136,6 +186,26 @@ function modelChoice(value: unknown, field: string): AgentModelChoice | undefine
   }
 }
 
+function optionalIntegerIn(value: unknown, field: string, min: number, max: number): number | undefined {
+  if (value === undefined || value === null) return undefined
+  return integerIn(value, field, min, max, min)
+}
+
+/** Validate the per-character reply-budget map. */
+function replyBudgetMap(value: unknown): Readonly<Record<string, number>> | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new AgentConfigInvalidError('角色回复长度必须是「角色卡 id → 字数」的对象')
+  }
+  const { min, max } = AGENT_CONFIG_LIMITS.maxReplyChars
+  const entries: [string, number][] = []
+  for (const [id, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (id.trim().length === 0) continue
+    entries.push([id, integerIn(raw, `角色 ${id} 的回复长度`, min, max, min)])
+  }
+  return entries.length === 0 ? undefined : Object.fromEntries(entries)
+}
+
 /**
  * Validate one config payload, filling absent fields from the defaults.
  * @param value - candidate config, however malformed.
@@ -157,6 +227,12 @@ export function normalizeAgentConfig(value: unknown): TavernAgentConfig {
   }
   const directorModel = modelChoice(record.directorModel, '导演模型')
   const characterModel = modelChoice(record.characterModel, '角色模型')
+  const { min: replyMin, max: replyMax } = AGENT_CONFIG_LIMITS.maxReplyChars
+  const maxReplyChars = optionalIntegerIn(record.maxReplyChars, '统一回复长度', replyMin, replyMax)
+  const directorMaxReplyChars = optionalIntegerIn(record.directorMaxReplyChars, '导演回复长度', replyMin, replyMax)
+  const characterMaxReplyChars = replyBudgetMap(record.characterMaxReplyChars)
+  const reasoningReserveTokens = optionalIntegerIn(record.reasoningReserveTokens, '推理预留 token',
+    AGENT_CONFIG_LIMITS.reasoningReserveTokens.min, AGENT_CONFIG_LIMITS.reasoningReserveTokens.max)
   return {
     schema: AGENT_CONFIG_SCHEMA,
     maxSpeechesPerBeat: integerIn(record.maxSpeechesPerBeat, '每幕最多发言角色数',
@@ -175,9 +251,45 @@ export function normalizeAgentConfig(value: unknown): TavernAgentConfig {
     rotateSpeakers: booleanOr(record.rotateSpeakers, '轮换发言', defaults.rotateSpeakers),
     honorPlayerMention: booleanOr(record.honorPlayerMention, '玩家点名优先', defaults.honorPlayerMention),
     unknownSpeaker: unknownSpeaker === 'first' ? 'first' : 'none',
+    ...(maxReplyChars === undefined ? {} : { maxReplyChars }),
+    ...(directorMaxReplyChars === undefined ? {} : { directorMaxReplyChars }),
+    ...(characterMaxReplyChars === undefined ? {} : { characterMaxReplyChars }),
+    ...(reasoningReserveTokens === undefined ? {} : { reasoningReserveTokens }),
     ...(directorModel === undefined ? {} : { directorModel }),
     ...(characterModel === undefined ? {} : { characterModel }),
   }
+}
+
+/**
+ * Reply budget one role actually gets.
+ *
+ * The per-role override wins, then the shared budget, and an absent result
+ * means the adapter's own model limit applies.
+ * @param config - workspace settings.
+ * @param role - which call is being measured.
+ * @param cardId - character card id, for a character call.
+ * @returns the budget in characters, or `undefined` for no cap.
+ */
+export function replyBudgetChars(
+  config: TavernAgentConfig,
+  role: 'director' | 'character',
+  cardId?: string,
+): number | undefined {
+  if (role === 'director') return config.directorMaxReplyChars ?? config.maxReplyChars
+  return (cardId === undefined ? undefined : config.characterMaxReplyChars?.[cardId]) ?? config.maxReplyChars
+}
+
+/**
+ * Provider token cap for one reply budget, including reasoning headroom.
+ *
+ * `max_tokens` bounds thinking and answer together; without the reserve a
+ * reasoning model spends the whole cap thinking and returns no text.
+ * @param chars - reply budget in characters.
+ * @param reserveTokens - reasoning headroom from the config.
+ * @returns the cap to send as `maxTokens`.
+ */
+export function replyCapTokens(chars: number, reserveTokens: number | undefined): number {
+  return tokensForChars(chars) + (reserveTokens ?? DEFAULT_REASONING_RESERVE)
 }
 
 /**

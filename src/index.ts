@@ -63,6 +63,8 @@ import {
   defaultAgentConfig,
   normalizeAgentConfig,
   readAgentConfig,
+  replyBudgetChars,
+  replyCapTokens,
   writeAgentConfig,
 } from './agent-config.js'
 import type { AgentModelChoice, TavernAgentConfig } from './agent-config.js'
@@ -97,6 +99,9 @@ export const TAVERN_PROMPT_SECTION = 'tavern:workspace-prompt'
 
 /** Reply text shown when a beat produced neither narration nor speech. */
 export const EMPTY_BEAT_NOTICE = '这一幕模型没有返回内容。可以再说一句，或检查提示词编排里的导演块是否被停用。'
+
+/** Appended when any call in a beat hit its reply budget. */
+export const TRUNCATED_NOTICE = '（本幕达到设定的回复长度上限，内容被截断。可在 Agent 编排里调大回复长度。）'
 
 /** Marker file name inside {@link TAVERN_DIRECTORY}. */
 export const MARKER_FILE = 'tavern.json'
@@ -975,6 +980,9 @@ export class TavernWorkspaceService extends Service {
     // Sum of every model call this beat made. The orchestrator stands in for the
     // loop's own call, so it owns forwarding usage back to the loop.
     const beatUsage = emptyUsage()
+    // Whether any call hit its reply budget, so the turn can say so instead of
+    // presenting a stub as a finished reply.
+    let truncatedBeat = false
     // The beat runs until the director stops naming a speaker, a character has
     // nothing to add, or the cap is reached. Each turn is a fresh director call
     // over the stage as extended by the previous one.
@@ -993,10 +1001,11 @@ export class TavernWorkspaceService extends Service {
         { role: 'user', text: turn === 0
           ? playerInput.length === 0 ? '（玩家保持了沉默）' : playerInput
           : '（继续这一幕。）' },
-      ], config.directorModel)
+      ], config.directorModel, replyBudgetChars(config, 'director'), config.reasoningReserveTokens)
       addUsage(beatUsage, directorResult.usage)
       const directorReply = directorResult.text
       const decision = parseDirectorReply(directorReply)
+      if (directorResult.truncated) truncatedBeat = true
       const resolved = resolveSpeaker(decision, cast)
       // Order: the character the player addressed (first turn only), the
       // director's pick, then the configured fallback for an unusable reference.
@@ -1055,9 +1064,10 @@ export class TavernWorkspaceService extends Service {
       const characterMessage = buildCharacterMessage(decision.narration, playerInput)
       const characterResult = await this.complete(options, characterSystem, [
         { role: 'user', text: characterMessage },
-      ], config.characterModel)
+      ], config.characterModel, replyBudgetChars(config, 'character', card.id), config.reasoningReserveTokens)
       addUsage(beatUsage, characterResult.usage)
       const speech = characterResult.text.trim()
+      if (characterResult.truncated) truncatedBeat = true
       turnRecord.characterSystem = characterSystem
       turnRecord.characterPromptMessages = [{ role: 'user', text: characterMessage }]
       turnRecord.characterModel = {
@@ -1107,8 +1117,16 @@ export class TavernWorkspaceService extends Service {
     // An empty beat means every model call returned nothing (or the director
     // produced no narration and named no speaker). Reporting that beats a blank
     // message the player cannot tell apart from a rendering failure.
+    //
+    // When a call was cut off, the truncation is the cause, not a broken
+    // director block: saying both would point the reader at the wrong knob.
     const rendered = renderBeatMarkdown(segments)
-    yield* textReply(options, rendered.length > 0 ? rendered : EMPTY_BEAT_NOTICE, beatUsage)
+    const body = rendered.length > 0
+      ? rendered
+      : truncatedBeat ? '' : EMPTY_BEAT_NOTICE
+    const notice = truncatedBeat ? TRUNCATED_NOTICE : ''
+    const text = [body, notice].filter(part => part.length > 0).join('\n\n')
+    yield* textReply(options, text.length > 0 ? text : EMPTY_BEAT_NOTICE, beatUsage)
   }
 
   /**
@@ -1122,6 +1140,8 @@ export class TavernWorkspaceService extends Service {
    * @param system - system prompt for this call.
    * @param messages - user turns.
    * @param choice - per-role model override; omitted follows the session.
+   * @param maxReplyChars - reply budget in characters; omitted sends no cap.
+   * @param reasoningReserve - tokens added to the cap for the model's thinking.
    * @returns the concatenated text output and the call's usage, when reported.
    */
   private async complete(
@@ -1129,7 +1149,9 @@ export class TavernWorkspaceService extends Service {
     system: string,
     messages: readonly { role: 'user'; text: string }[],
     choice?: AgentModelChoice,
-  ): Promise<{ text: string; usage?: TokenUsage }> {
+    maxReplyChars?: number,
+    reasoningReserve?: number,
+  ): Promise<{ text: string; usage?: TokenUsage; truncated: boolean }> {
     const stream = this.ctx.llm.stream({
       provider: choice?.provider ?? options.provider,
       model: choice?.model ?? options.model,
@@ -1143,17 +1165,26 @@ export class TavernWorkspaceService extends Service {
       ...(choice?.reasoningEffort !== undefined
         ? { reasoningEffort: ReasoningEffortId(choice.reasoningEffort) }
         : options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+      ...(maxReplyChars === undefined ? {} : { maxTokens: replyCapTokens(maxReplyChars, reasoningReserve) }),
     })
     let text = ''
     let usage: TokenUsage | undefined
+    // The provider stops at the token cap mid-sentence; the beat needs to know
+    // so it can say the reply was cut instead of presenting a stub as complete.
+    let truncated = false
     for await (const chunk of stream) {
       if (chunk.type === 'text-delta') text += chunk.text
       else if (chunk.type === 'usage') usage = chunk.usage
+      else if (chunk.type === 'finish' && chunk.reason.kind === 'max-tokens') truncated = true
       else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
         throw new Error(`tavern model call failed: ${chunk.reason.failure.message}`)
       }
     }
-    return usage === undefined ? { text } : { text, usage }
+    return {
+      text,
+      truncated,
+      ...(usage === undefined ? {} : { usage }),
+    }
   }
 
   /** Persist one beat's prompts and outcome for inspection. */
