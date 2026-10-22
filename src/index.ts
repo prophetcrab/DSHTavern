@@ -24,7 +24,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { createUserMessage, isAgentLoopRequest, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createMessage, createUserMessage, isAgentLoopRequest, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
@@ -111,6 +111,20 @@ export const EMPTY_BEAT_NOTICE = '这一幕模型没有返回内容。可以再�
 
 /** Appended when any call in a beat hit its reply budget. */
 export const TRUNCATED_NOTICE = '（本幕达到设定的回复长度上限，内容被截断。可在 Agent 编排里调大回复长度。）'
+
+/**
+ * Source stamped on the opening turn's assistant message.
+ *
+ * The opening script is model-authored, so the message keeps the model kind;
+ * the provider/model recorded are the ones the opening was actually generated
+ * with, not the session's routed call.
+ * @param provider - provider route used for generation.
+ * @param model - model used for generation.
+ * @returns the message source.
+ */
+function openingMessageSource(provider: string, model: string): { kind: 'model'; provider: string; model: string } {
+  return { kind: 'model', provider, model }
+}
 
 /** Marker file name inside {@link TAVERN_DIRECTORY}. */
 export const MARKER_FILE = 'tavern.json'
@@ -1014,11 +1028,16 @@ export class TavernWorkspaceService extends Service {
     // Segments render it once, as the head of the first reply, which is also the
     // last time it is shown.
     const openingLines: Omit<StageEntry, 'seq' | 'at'>[] = []
+    // The opening was appended as the story's turn 0, so the client already
+    // renders it above this reply. When that write succeeded the reply must not
+    // repeat it; when it did not (an older story, or a session that could not
+    // accept the turn), the opening still needs to appear somewhere.
+    const openingAlreadyShown = script?.appendedAt !== undefined
     if (script !== undefined) {
       for (const segment of script.segments) {
         if (segment.kind === 'narration') {
           openingLines.push({ kind: 'narration', text: segment.text, scope: 'observable' })
-          segments.push({ kind: 'narration', text: segment.text })
+          if (!openingAlreadyShown) segments.push({ kind: 'narration', text: segment.text })
           continue
         }
         openingLines.push({
@@ -1028,7 +1047,9 @@ export class TavernWorkspaceService extends Service {
           text: segment.text,
           scope: 'observable',
         })
-        segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
+        if (!openingAlreadyShown) {
+          segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
+        }
       }
     } else if (staticOpening !== undefined) {
       if (staticOpening.narration !== undefined) {
@@ -1707,7 +1728,112 @@ export class TavernWorkspaceService extends Service {
    */
   async ensureOpeningScript(workspaceId: string, sessionId: string): Promise<OpeningScript> {
     const workspace = await this.requireTavernWorkspace(workspaceId)
-    return this.ensureOpeningScriptForDirectory(workspace.path, sessionId)
+    const script = await this.ensureOpeningScriptForDirectory(workspace.path, sessionId)
+    return this.stageOpeningTurn(workspace.path, sessionId, script)
+  }
+
+  /**
+   * Write a script into the session transcript as the story's opening turn.
+   *
+   * Runs once per story: the stored script records `appendedAt` after a
+   * successful write, so a reload never duplicates the turn.
+   * @param workspacePath - tavern workspace root.
+   * @param sessionId - chat identity.
+   * @param script - generated script.
+   * @returns the script, with `appendedAt` set when the transcript accepted it.
+   */
+  private stageOpeningTurn(workspacePath: string, sessionId: string, script: OpeningScript): OpeningScript {
+    if (script.segments.length === 0 || script.appendedAt !== undefined) return script
+    const text = script.segments
+      .map(segment => segment.kind === 'narration'
+        ? segment.text
+        : `**${segment.speakerName ?? '角色'}**\n\n${segment.text}`)
+      .join('\n\n')
+    const generatedBy = script.generatedBy ?? this.defaultSelection()
+    if (generatedBy === undefined) return script
+    if (!this.appendOpeningTurn(sessionId, text, generatedBy)) return script
+    const appended: OpeningScript = { ...script, appendedAt: new Date().toISOString() }
+    // Best-effort: the transcript already has the opening, so a failed cache
+    // write only risks a second generation, not a wrong transcript.
+    void writeOpeningScript(storyDirectory(workspacePath, sessionId), appended)
+      .catch((error: unknown) => {
+        this.ctx.logger.warn(`[dshtavern] opening script not stored: ${String(error)}`)
+      })
+    return appended
+  }
+
+  /**
+   * Latest turn number recorded for one session.
+   * @param sessionId - chat identity.
+   * @returns the projection's `lastTurn`, or 0 when it cannot be read.
+   */
+  private lastTurnOf(sessionId: string): number {
+    const sessions = (this.ctx as unknown as { get(name: string): unknown }).get('sessions') as
+      | { get?: (id: string) => unknown | undefined }
+      | undefined
+    const session = sessions?.get?.(sessionId)
+    if (session === undefined) return 0
+    const projections = (this.ctx as unknown as { get(name: string): unknown }).get('sessionProjections') as
+      | { stateOf?: (session: unknown, key: string) => { lastTurn?: number } | undefined }
+      | undefined
+    const state = projections?.stateOf?.(session, 'turnBoundary')
+    return typeof state?.lastTurn === 'number' ? state.lastTurn : 0
+  }
+
+  /**
+   * Append a generated opening to the session transcript as its own turn.
+   *
+   * The opening belongs before the player's first message, not after it: the
+   * player reads the scene, then acts. Rendering it inside the first reply put
+   * it below the player's line, which is backwards. Writing it as turn 0 means
+   * the client renders it as an ordinary assistant turn ahead of turn 1, and the
+   * model's derived history carries it too.
+   *
+   * Only safe while the session has no turns yet; a story that already started
+   * keeps the opening on the stage alone, and the caller renders it in the
+   * reply instead.
+   * @param sessionId - chat identity.
+   * @param segmentText - opening text as one assistant message body.
+   * @param generatedBy - provider/model the script was generated with.
+   * @returns whether the transcript accepted the opening.
+   */
+  private appendOpeningTurn(
+    sessionId: string,
+    segmentText: string,
+    generatedBy: { provider: string; model: string },
+  ): boolean {
+    const sessions = (this.ctx as unknown as { get(name: string): unknown }).get('sessions') as
+      | { get?: (id: string) => unknown | undefined }
+      | undefined
+    const session = sessions?.get?.(sessionId) as
+      | { append: (type: string, data: unknown, opts?: unknown) => { seq: number } }
+      | undefined
+    if (session === undefined) return false
+    // A started story already owns turn 1; appending turn 0 now would place the
+    // opening after the player's line. The loop's own projection is the
+    // authority on whether any turn exists yet.
+    if (this.lastTurnOf(sessionId) > 0) return false
+
+    try {
+      session.append('turn/start', { turn: 0 })
+      session.append('step/start', { turn: 0, step: 0 })
+      session.append('assistant/message', {
+        turn: 0,
+        step: 0,
+        message: createMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: segmentText }],
+          source: openingMessageSource(generatedBy.provider, generatedBy.model),
+        }),
+        stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [], texts: [segmentText] }],
+      }, { surfaceOp: 'append' })
+      session.append('step/end', { turn: 0, step: 0 })
+      session.append('turn/end', { turn: 0, reason: { kind: 'completed' } })
+      return true
+    } catch (error) {
+      this.ctx.logger.warn(`[dshtavern] opening turn not appended: ${String(error)}`)
+      return false
+    }
   }
 
   /**
@@ -1780,11 +1906,14 @@ export class TavernWorkspaceService extends Service {
       return { segments: [] }
     }
 
-    const script = parseOpeningReply(reply, cards)
-    if (script.segments.length === 0) {
+    const parsed = parseOpeningReply(reply, cards)
+    if (parsed.segments.length === 0) {
       this.ctx.logger.warn('[dshtavern] opening generation produced no usable segments')
       return { segments: [] }
     }
+    // Remember which route wrote it: the transcript turn stamps that source, and
+    // a later regeneration must not claim a different provider.
+    const script: OpeningScript = { ...parsed, generatedBy: selection }
     try {
       await writeOpeningScript(directory, script)
     } catch (error) {

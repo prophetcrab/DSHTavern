@@ -153,7 +153,8 @@
 - 开场脚本：空会话在输入框上方显示一张卡片（`conversation.input.dock`，仅 `session.blank` 时渲染），玩家一开口即消失。内容是**一次真实模型调用生成的整段开场**，而不是卡里的静态字段：
   - 生成发生在 `GET /tavern/greeting?sessionId=` 首次请求时，用 `agentDefaultModel.currentSelection()` 取 provider/model（冷会话还没有请求头，这是唯一来源），提示词要求「1–2 段旁白铺陈场景 + 1–2 位角色开口」，并强制 `{"segments":[...]}` 的 JSON 输出。
   - 结果按会话存到 `.dshtavern/stories/<session>/opening.json`，重开不再生成；舞台已有内容时不再生成（迟到的开场会读成第二个开头）。
-  - 第一个 beat 把脚本按旁白/台词顺序同时写进**舞台**与**本轮分段**：舞台是导演与角色读到的历史，分段是玩家在对话流里看到的开场。两处都要，因为预聊天卡片在玩家一开口时就消失——只写舞台会让开场从对话记录里彻底消失。
+  - 生成完成后，脚本作为**独立的 turn 0** 写入会话记录（`turn/start` → `step/start` → `assistant/message` → `step/end` → `turn/end`），因此在对话流里出现在玩家第一句话**之前**，也会进入模型的派生历史。靠 `turnBoundary` 投影的 `lastTurn > 0` 判断故事是否已开始，已开始则不再写入。
+  - 同时按旁白/台词顺序写进**舞台**（导演与角色读到的历史）。舞台始终写；本轮回复的分段只在 turn 0 写入失败时才带上开场，避免重复显示。
   - 生成失败或解析不出可用段落时，回退到静态开场：`scenario` 作旁白、`greetings.first` 作台词，各取「名册顺序里第一个真正有内容的卡」。`greetings.alternates` 尚未使用（重开需搭配重生成）。
   - **样式归属**：开场卡的规则放在 `PANEL_CSS`，由侧栏标记那个常驻 effect 注入；不能放 `TOOLBOX_CSS`——它只在工具箱浮层打开时挂载，会让卡片完全没有样式。`--tv-*` 设计变量同时声明在 `.dshtavern-panel` 和 `.dshtavern-greeting` 上，因为卡片渲染在会话 dock 里、不在面板内，只声明在面板上会让它的所有 `calc()` 失效。
   - **生成中状态与并发**：一次生成通常十几秒，卡片在此期间显示转圈、「正在生成开场…」和一行说明（尊重 `prefers-reduced-motion`）。按 story 目录去重：预聊天卡片与第一个 beat 请求同一次生成，玩家在转圈期间直接发言也不会触发第二次调用，更不会让静态兜底抢在生成前面。

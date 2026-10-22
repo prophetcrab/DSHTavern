@@ -38,6 +38,10 @@ export interface OpeningScript {
   readonly focusCardId?: string
   /** ISO-8601 of generation, for the record. */
   readonly generatedAt?: string
+  /** ISO-8601 of the moment the script was written into the session transcript. */
+  readonly appendedAt?: string
+  /** Provider/model the script was generated with, stamped on its transcript turn. */
+  readonly generatedBy?: { readonly provider: string; readonly model: string }
 }
 
 /** Schema version of the stored script. */
@@ -217,6 +221,7 @@ export async function readOpeningScript(directory: string): Promise<OpeningScrip
     segments,
     ...(typeof record.focusCardId === 'string' ? { focusCardId: record.focusCardId } : {}),
     ...(typeof record.generatedAt === 'string' ? { generatedAt: record.generatedAt } : {}),
+    ...(typeof record.appendedAt === 'string' ? { appendedAt: record.appendedAt } : {}),
   }
 }
 
@@ -230,6 +235,7 @@ export async function writeOpeningScript(directory: string, script: OpeningScrip
     schema: OPENING_SCHEMA,
     segments: script.segments,
     ...(script.focusCardId === undefined ? {} : { focusCardId: script.focusCardId }),
+    ...(script.appendedAt === undefined ? {} : { appendedAt: script.appendedAt }),
     generatedAt: script.generatedAt ?? new Date().toISOString(),
   }
   await mkdir(directory, { recursive: true })
