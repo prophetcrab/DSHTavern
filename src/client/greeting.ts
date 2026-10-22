@@ -14,11 +14,22 @@ import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { matchTavernWorkspace, subscribeToolboxState, readToolboxState, ensureTaverns } from './toolbox.js'
 
-/** One workspace's resolved opening, as served by `/tavern/greeting`. */
-interface OpeningView {
-  readonly narration?: { readonly cardId: string; readonly text: string }
-  readonly greeting?: { readonly cardId: string; readonly name: string; readonly text: string }
+/** One opening script segment as served by `/tavern/greeting?sessionId=`. */
+interface ScriptSegmentView {
+  readonly kind: 'narration' | 'speech'
+  readonly cardId?: string
+  readonly speakerName?: string
+  readonly text: string
 }
+
+/** What the pre-chat card renders. */
+type OpeningView =
+  | { readonly kind: 'script'; readonly segments: readonly ScriptSegmentView[] }
+  | {
+    readonly kind: 'static'
+    readonly narration?: { readonly cardId: string; readonly text: string }
+    readonly greeting?: { readonly cardId: string; readonly name: string; readonly text: string }
+  }
 
 /** Props the session-scoped dock slot supplies. */
 export interface GreetingDockProps {
@@ -29,17 +40,47 @@ export interface GreetingDockProps {
 }
 
 /**
- * Read the opening for one workspace.
+ * Read the opening for one story.
+ *
+ * With a session the host generates (once, cached on disk) a full opening
+ * script; without one it only reports the static card fields, used as the
+ * fallback when no script could be written.
  * @param workspaceId - registered tavern workspace id.
- * @returns the scene and first line, or `undefined` when no card defines either.
+ * @param sessionId - chat identity, so the script belongs to this chat.
+ * @returns what the card should render, or `undefined` when there is nothing.
  */
-async function fetchOpening(workspaceId: string): Promise<OpeningView | undefined> {
-  const response = await fetch(`/tavern/greeting?workspaceId=${encodeURIComponent(workspaceId)}`, {
+async function fetchOpening(workspaceId: string, sessionId: string | undefined): Promise<OpeningView | undefined> {
+  const params = new URLSearchParams({ workspaceId })
+  if (sessionId !== undefined && sessionId.length > 0) params.set('sessionId', sessionId)
+  const response = await fetch(`/tavern/greeting?${params.toString()}`, {
     headers: { accept: 'application/json' },
     cache: 'no-store',
   })
-  const body = await response.json() as { ok?: unknown } & Partial<OpeningView>
+  const body = await response.json() as {
+    ok?: unknown
+    script?: { segments?: unknown }
+    narration?: { cardId?: unknown; text?: unknown }
+    greeting?: { cardId?: unknown; name?: unknown; text?: unknown }
+  }
   if (body.ok !== true) return undefined
+
+  const rawSegments = Array.isArray(body.script?.segments) ? body.script.segments : []
+  const segments: ScriptSegmentView[] = []
+  for (const item of rawSegments) {
+    if (typeof item !== 'object' || item === null) continue
+    const record = item as Record<string, unknown>
+    const kind = record.kind === 'speech' ? 'speech' : record.kind === 'narration' ? 'narration' : undefined
+    const text = typeof record.text === 'string' ? record.text : ''
+    if (kind === undefined || text.trim().length === 0) continue
+    segments.push({
+      kind,
+      text,
+      ...(typeof record.cardId === 'string' ? { cardId: record.cardId } : {}),
+      ...(typeof record.speakerName === 'string' ? { speakerName: record.speakerName } : {}),
+    })
+  }
+  if (segments.length > 0) return { kind: 'script', segments }
+
   const narration = typeof body.narration?.text === 'string' && body.narration.text.trim().length > 0
     ? { cardId: String(body.narration.cardId ?? ''), text: body.narration.text }
     : undefined
@@ -48,7 +89,11 @@ async function fetchOpening(workspaceId: string): Promise<OpeningView | undefine
     ? { cardId: String(body.greeting.cardId ?? ''), name: body.greeting.name, text: body.greeting.text }
     : undefined
   if (narration === undefined && greeting === undefined) return undefined
-  return { ...(narration === undefined ? {} : { narration }), ...(greeting === undefined ? {} : { greeting }) }
+  return {
+    kind: 'static',
+    ...(narration === undefined ? {} : { narration }),
+    ...(greeting === undefined ? {} : { greeting }),
+  }
 }
 
 /**
@@ -81,15 +126,34 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
       return
     }
     let cancelled = false
-    fetchOpening(station.workspaceId).then((next) => {
+    fetchOpening(station.workspaceId, props.session.sessionId).then((next) => {
       if (!cancelled) setOpening(next ?? null)
     }).catch(() => {
       if (!cancelled) setOpening(null)
     })
     return () => { cancelled = true }
-  }, [station])
+  }, [station, props.session.sessionId])
 
   if (!props.session.blank || opening === null) return null
+
+  // Script form: the model wrote the scene and its lines, so each segment keeps
+  // its own voice instead of being flattened into one paragraph.
+  if (opening.kind === 'script') {
+    return createElement('section', {
+      className: 'dshtavern-greeting',
+      'aria-label': '开场',
+    },
+    opening.segments.map((segment, index) => segment.kind === 'narration'
+      ? createElement('p', { key: index, className: 'dshtavern-opening-narration' }, segment.text)
+      : createElement('div', { key: index, className: 'dshtavern-opening-speech' },
+        createElement('div', { className: 'dshtavern-greeting-head' },
+          createElement('span', { className: 'dshtavern-greeting-avatar', 'aria-hidden': true },
+            (segment.speakerName ?? '?').slice(0, 1)),
+          createElement('div', { className: 'dshtavern-greeting-title' },
+            createElement('span', { className: 'dshtavern-greeting-name' }, segment.speakerName ?? '角色'))),
+        createElement('p', { className: 'dshtavern-greeting-text' }, segment.text))),
+    createElement('div', { className: 'dshtavern-opening-foot' }, '回应即可开始'))
+  }
 
   return createElement('section', {
     className: 'dshtavern-greeting',

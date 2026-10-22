@@ -1548,6 +1548,15 @@ export const TOOLBOX_CSS = `
   padding-top: calc(12px * var(--tv-scale));
   border-top: var(--tv-hairline) solid var(--dsw-alias-border-l1);
 }
+.dshtavern-greeting > .dshtavern-opening-speech + .dshtavern-opening-narration {
+  margin-top: calc(12px * var(--tv-scale));
+}
+.dshtavern-opening-foot {
+  margin-top: calc(12px * var(--tv-scale));
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--tv-fs-small);
+  text-align: right;
+}
 @media (max-width: 560px) {
   .dshtavern-agent-row { flex-direction: column; align-items: stretch; gap: 6px; }
   .dshtavern-agent-row-toggle { flex-direction: row; align-items: center; }

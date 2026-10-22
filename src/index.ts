@@ -55,6 +55,13 @@ import {
 } from './orchestrator.js'
 import { fromCardEntries } from './worldbook.js'
 import { greetingStageLine, openingNarrationStageLine, selectOpening } from './greeting.js'
+import {
+  buildOpeningSystem,
+  parseOpeningReply,
+  readOpeningScript,
+  writeOpeningScript,
+} from './opening.js'
+import type { OpeningScript } from './opening.js'
 import { buildPreview } from './preview.js'
 import type { PromptPreview } from './preview.js'
 import type { BeatRecord, BeatSegment, CastMember, DirectorDecision } from './orchestrator.js'
@@ -975,11 +982,16 @@ export class TavernWorkspaceService extends Service {
     // a fallback that keeps the scene moving, not the final word on who answers.
     const addressed = config.honorPlayerMention ? mentionedSpeaker(playerInput, cast) : undefined
 
-    // The first beat of an empty story stages the card's opening — scene, then
-    // first line — before the director runs, so the scene starts from what the
-    // cards authored instead of from a blank stage. Later beats find a
-    // non-empty stage and skip this.
-    const opening = stage.length === 0 ? selectOpening(cards) : undefined
+    // The first beat of an empty story stages the generated opening script —
+    // narration and character lines — before the director runs, so the scene is
+    // already established instead of blank. A story whose script could not be
+    // generated falls back to the cards' static scenario and greeting.
+    const script = stage.length === 0 && story !== undefined
+      ? await readOpeningScript(storyDirectory(cwd, story))
+      : undefined
+    const staticOpening = stage.length === 0 && (script === undefined || script.segments.length === 0)
+      ? selectOpening(cards)
+      : undefined
 
     const segments: BeatSegment[] = []
     const spoken: CastMember[] = []
@@ -988,13 +1000,24 @@ export class TavernWorkspaceService extends Service {
     // Staged, not segmented: the client already showed the opening as the
     // pre-chat card, so replaying it here would print it twice. The stage copy
     // is what the director and every character read as history.
-    if (opening?.narration !== undefined) {
-      const line = openingNarrationStageLine(opening.narration)
-      stage.push({ seq: nextSeq(stage), at: new Date().toISOString(), ...line })
-      staged.push(line)
+    const openingLines: Omit<StageEntry, 'seq' | 'at'>[] = []
+    if (script !== undefined) {
+      for (const segment of script.segments) {
+        openingLines.push(segment.kind === 'narration'
+          ? { kind: 'narration', text: segment.text, scope: 'observable' }
+          : {
+            kind: 'speech',
+            speaker: segment.cardId ?? '',
+            speakerName: segment.speakerName ?? '',
+            text: segment.text,
+            scope: 'observable',
+          })
+      }
+    } else if (staticOpening !== undefined) {
+      if (staticOpening.narration !== undefined) openingLines.push(openingNarrationStageLine(staticOpening.narration))
+      if (staticOpening.greeting !== undefined) openingLines.push(greetingStageLine(staticOpening.greeting))
     }
-    if (opening?.greeting !== undefined) {
-      const line = greetingStageLine(opening.greeting)
+    for (const line of openingLines) {
       stage.push({ seq: nextSeq(stage), at: new Date().toISOString(), ...line })
       staged.push(line)
     }
@@ -1650,6 +1673,88 @@ export class TavernWorkspaceService extends Service {
   }
 
   /**
+   * Read a story's generated opening script, generating it on first use.
+   *
+   * The script is written once per chat and stored under that chat's story
+   * directory, so reopening never spends another call and never changes what the
+   * player already read.
+   * @param workspaceId - registered tavern workspace id.
+   * @param sessionId - chat identity owning the script.
+   * @returns the stored or freshly generated script; empty when it cannot be written.
+   */
+  async ensureOpeningScript(workspaceId: string, sessionId: string): Promise<OpeningScript> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const directory = storyDirectory(workspace.path, sessionId)
+    const stored = await readOpeningScript(directory)
+    if (stored !== undefined) return stored
+
+    const cards = listCharacterCardsSync(workspace.path)
+    if (cards.length === 0) return { segments: [] }
+    // The story already started; an opening written now would arrive late and
+    // read as a second beginning.
+    const stage = await readStage(workspace.path, sessionId)
+    if (stage.length > 0) return { segments: [] }
+
+    const book = await readWorldbook(workspace.path)
+    const system = buildOpeningSystem({ cards, worldbook: book.entries })
+    const selection = this.defaultSelection()
+    if (selection === undefined) return { segments: [] }
+
+    let reply = ''
+    try {
+      const stream = this.ctx.llm.stream({
+        provider: selection.provider,
+        model: selection.model,
+        system,
+        messages: [createUserMessage({
+          content: [{ type: 'text', text: '写开场。' }],
+          source: { kind: 'user' },
+        })],
+      })
+      for await (const chunk of stream) {
+        if (chunk.type === 'text-delta') reply += chunk.text
+        else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
+          throw new Error(chunk.reason.failure.message)
+        }
+      }
+    } catch (error) {
+      this.ctx.logger.warn(`[dshtavern] opening generation failed: ${String(error)}`)
+      return { segments: [] }
+    }
+
+    const script = parseOpeningReply(reply, cards)
+    if (script.segments.length === 0) {
+      this.ctx.logger.warn('[dshtavern] opening generation produced no usable segments')
+      return { segments: [] }
+    }
+    try {
+      await writeOpeningScript(directory, script)
+    } catch (error) {
+      // The script is still returnable; failing to cache it only costs a
+      // regeneration on the next open.
+      this.ctx.logger.warn(`[dshtavern] opening script not stored: ${String(error)}`)
+    }
+    return script
+  }
+
+  /**
+   * Provider and model a brand-new session would use.
+   *
+   * A chat that has never sent a request has no request header, so the adapter
+   * default is the only source. Read defensively: the service is optional on a
+   * profile without a model picker.
+   * @returns the selection, or `undefined` when no default is available.
+   */
+  private defaultSelection(): { provider: string; model: string } | undefined {
+    const service = (this.ctx as unknown as { get(name: string): unknown }).get('agentDefaultModel') as
+      | { currentSelection?: () => { provider?: string; model?: string } }
+      | undefined
+    const selection = service?.currentSelection?.()
+    if (selection?.provider === undefined || selection.model === undefined) return undefined
+    return { provider: selection.provider, model: selection.model }
+  }
+
+  /**
    * Read one workspace's agent orchestration settings.
    * @param workspaceId - registered tavern workspace id.
    * @returns the stored config, or the defaults when absent.
@@ -1703,7 +1808,7 @@ export class TavernWorkspaceService extends Service {
     return catalog
   }
 
-  /** Resolve one workspace's opening for the pre-chat card. */
+  /** Resolve one story's opening for the pre-chat card. */
   private async handleGreeting(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!allowLoopback(req, res)) return
     if (req.method !== 'GET') {
@@ -1711,7 +1816,17 @@ export class TavernWorkspaceService extends Service {
       return
     }
     try {
-      sendJson(res, 200, { ok: true, ...await this.opening(workspaceIdFromUrl(req)) })
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const workspaceId = workspaceIdFromUrl(req)
+      const sessionId = url.searchParams.get('sessionId')
+      // With a session the call generates (once) and returns the scripted
+      // opening; without one it only reports the static card fields.
+      if (sessionId === null || sessionId.length === 0) {
+        sendJson(res, 200, { ok: true, ...await this.opening(workspaceId) })
+        return
+      }
+      const script = await this.ensureOpeningScript(workspaceId, sessionId)
+      sendJson(res, 200, { ok: true, script })
     } catch (error) {
       this.fail(res, error)
     }
