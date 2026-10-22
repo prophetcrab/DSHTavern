@@ -992,12 +992,28 @@ export class TavernWorkspaceService extends Service {
       const resolved = resolveSpeaker(decision, cast)
       // Order: the character the player addressed (first turn only), the
       // director's pick, then the configured fallback for an unusable reference.
-      const speaker = (turn === 0 ? addressed : undefined)
+      const addressedThisTurn = turn === 0 ? addressed : undefined
+      const speaker = addressedThisTurn
         ?? resolved
         ?? (config.unknownSpeaker === 'first' ? cast[0] : undefined)
+      const speakerSource: SpeakerSource | undefined = speaker === undefined
+        ? undefined
+        : addressedThisTurn === undefined
+          ? resolved === undefined ? 'fallback-first' : 'director'
+          : 'player-mention'
       if (turn === 0) inner = decision.inner
 
-      const turnRecord: BeatTurn = { directorSystem, directorReply, decision }
+      const turnRecord: BeatTurn = {
+        directorSystem,
+        directorReply,
+        decision,
+        directorModel: {
+          provider: config.directorModel?.provider ?? options.provider,
+          model: config.directorModel?.model ?? options.model,
+        },
+        ...(speakerSource === undefined ? {} : { speakerSource }),
+        ...(speaker === undefined ? {} : { effectiveSpeaker: { id: speaker.id, name: speaker.name } }),
+      }
       if (decision.narration.length > 0) {
         stage.push({
           seq: nextSeq(stage),
@@ -1036,6 +1052,10 @@ export class TavernWorkspaceService extends Service {
       const speech = characterResult.text.trim()
       turnRecord.characterSystem = characterSystem
       turnRecord.characterPromptMessages = [{ role: 'user', text: characterMessage }]
+      turnRecord.characterModel = {
+        provider: config.characterModel?.provider ?? options.provider,
+        model: config.characterModel?.model ?? options.model,
+      }
       turnRecord.speech = speech
       turns.push(turnRecord)
       if (speech.length === 0) break
@@ -1830,10 +1850,21 @@ interface BeatTurn {
   directorSystem: string
   directorReply: string
   decision: DirectorDecision
+  /** Route and model the director call used. */
+  directorModel?: { readonly provider: string; readonly model: string }
+  /** Route and model the character call used. */
+  characterModel?: { readonly provider: string; readonly model: string }
+  /** How the speaking character was chosen, when one spoke. */
+  speakerSource?: SpeakerSource
+  /** Character the orchestrator actually used; differs from the director's pick when overridden. */
+  effectiveSpeaker?: { readonly id: string; readonly name: string }
   characterSystem?: string
   characterPromptMessages?: readonly { role: string; text: string }[]
   speech?: string
 }
+
+/** Where a turn's speaking character came from. */
+type SpeakerSource = 'director' | 'player-mention' | 'fallback-first'
 
 /**
  * Next stage sequence number.
