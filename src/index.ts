@@ -1008,25 +1008,37 @@ export class TavernWorkspaceService extends Service {
     const spoken: CastMember[] = []
     const turns: BeatTurn[] = []
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
-    // Staged, not segmented: the client already showed the opening as the
-    // pre-chat card, so replaying it here would print it twice. The stage copy
-    // is what the director and every character read as history.
+    // The opening is both staged and segmented. The pre-chat card disappears the
+    // moment the player speaks, so leaving it out of this reply would drop it
+    // from the transcript entirely — the player would watch the opening vanish.
+    // Segments render it once, as the head of the first reply, which is also the
+    // last time it is shown.
     const openingLines: Omit<StageEntry, 'seq' | 'at'>[] = []
     if (script !== undefined) {
       for (const segment of script.segments) {
-        openingLines.push(segment.kind === 'narration'
-          ? { kind: 'narration', text: segment.text, scope: 'observable' }
-          : {
-            kind: 'speech',
-            speaker: segment.cardId ?? '',
-            speakerName: segment.speakerName ?? '',
-            text: segment.text,
-            scope: 'observable',
-          })
+        if (segment.kind === 'narration') {
+          openingLines.push({ kind: 'narration', text: segment.text, scope: 'observable' })
+          segments.push({ kind: 'narration', text: segment.text })
+          continue
+        }
+        openingLines.push({
+          kind: 'speech',
+          speaker: segment.cardId ?? '',
+          speakerName: segment.speakerName ?? '',
+          text: segment.text,
+          scope: 'observable',
+        })
+        segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
       }
     } else if (staticOpening !== undefined) {
-      if (staticOpening.narration !== undefined) openingLines.push(openingNarrationStageLine(staticOpening.narration))
-      if (staticOpening.greeting !== undefined) openingLines.push(greetingStageLine(staticOpening.greeting))
+      if (staticOpening.narration !== undefined) {
+        openingLines.push(openingNarrationStageLine(staticOpening.narration))
+        segments.push({ kind: 'narration', text: staticOpening.narration.text })
+      }
+      if (staticOpening.greeting !== undefined) {
+        openingLines.push(greetingStageLine(staticOpening.greeting))
+        segments.push({ kind: 'speech', name: staticOpening.greeting.name, text: staticOpening.greeting.text })
+      }
     }
     for (const line of openingLines) {
       stage.push({ seq: nextSeq(stage), at: new Date().toISOString(), ...line })
