@@ -226,6 +226,15 @@ export function readToolboxState(): ToolboxState {
   return state
 }
 
+/**
+ * Subscribe to store changes, including the tavern workspace list.
+ * @param listener - called after every state change.
+ * @returns the unsubscribe function.
+ */
+export function subscribeToolboxState(listener: () => void): () => void {
+  return subscribe(listener)
+}
+
 /** Standard props the composer-left slot provides to the detector. */
 export interface ToolboxDetectorProps {
   readonly sessionId: string

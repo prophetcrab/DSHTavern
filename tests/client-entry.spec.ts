@@ -12,6 +12,9 @@ interface CapturedEntry {
 function mount(): CapturedEntry[] {
   const entries: CapturedEntry[] = []
   const ctx = {
+    // The entry registers the sidebar-marker observer through `ctx.effect`;
+    // running the callback matches the real lifecycle and returns its disposer.
+    effect: (callback: () => (() => void) | void) => callback(),
     slots: {
       inject: (_name: string, callback: () => () => void) => callback(),
       register: (options: Record<string, unknown>, component: (props: never) => unknown) => {
