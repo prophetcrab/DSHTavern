@@ -1,69 +1,94 @@
-# DSHTavern
+# DSH-Tavern
 
-用 DeepSeek Harness 的插件机制实现一个 SillyTavern 式的酒馆。
+用 DeepSeek Harness 的插件机制实现 SillyTavern 式角色扮演。
+
+**一个酒馆 = 一个带标记的工作区；每个聊天 = 一条会话；每轮 = 一次导演调用 + 每位开口角色各一次独立调用。** 导演决定旁白、节奏和谁说话，角色只看到自己的卡和可观察的舞台——两个角色不会互相污染语气，也不会看到导演的私有剧情。
 
 - 架构与开发进度（唯一事实来源，随改动更新）：[docs/architecture.md](docs/architecture.md)
 - 决策文档（为什么这样设计）：[docs/decisions/](docs/decisions/)
 - 设计文档（准备采用的方案）：[docs/design/](docs/design/)
 
-## 当前进度
+## 组成
 
-| 模块 | 状态 |
+插件包含两个可独立启停的组件，以及两个内部预设：
+
+| 组件 | 作用 |
 |---|---|
-| 工作区标记（`.dshtavern/tavern.json` + 宿主服务） | 已完成（单测 + web profile 启动验证） |
-| 酒馆面板 / 浏览器半 | v0.6：酒馆列表、新建/收编/取消标记；**创建前必须选择模式（角色扮演 / 小说，创建后不可更改）**；整页单卡片、自动刷新、二次确认、宽屏双栏、2K 响应式字号、轻量交互动效（宿主 `/tavern/*` 路由已联调） |
-| 提示词编排 | v0.7：会话内可拖动的悬浮工具箱图标 → 只含工具图标的浮层 → 子弹窗；块卡片拖拽排序、启停、恢复默认；可编辑块（主模板/用户人设/作者笔记/历史后指令）点击卡片弹出**独立编辑弹窗**（保存/取消/恢复默认文本）；覆盖内容存 `prompts/prompt.json`；未导入角色卡时隐藏角色卡来源块（v1 编排仅用于角色扮演模式，小说模式块待实现） |
-| `tavern` agent preset / 提示词装配 | v0.3 A 路线 + B-lite 清洗：内部 preset `tavern-rp` / `tavern-novel`（旧 `tavern` 保留兼容），全部从手动名单隐藏；宿主在 `agent/created` 直接注册 complete system prompt（同步读工作区 `prompts/prompt.json`，仅角色扮演模式），`suppressRuntimeContext()`；再在 `llm/stream` 把最终请求清洗为「编排 system + cwd 一行 + 历史 + 本轮输入」，删除 required 的 team identity、system-reminder 与全部工具 schema，并把最终请求写入 `.dshtavern/state/last-request.json`；按工作区 mode 自动绑定；修改 preset 树需要重启 DSH 才生效 |
+| `dshtavern` | 酒馆本体：工作区标记、提示词装配、模型调用拦截与编排、HTTP 路由 |
+| `dshtavern/stats` | 用量统计：工作区与会话的 token、上下文占用、缓存命中率 |
+| `tavern-rp` / `tavern-novel` | 内部 Agent 预设，按工作区模式自动绑定，不出现在全局预设名单 |
 
-测试：`pnpm test`（88 项通过）；构建：`pnpm build`（宿主 `tsc` + 浏览器半 `tsdown`）。
+`preset-tavern`（旧版兼容 id）已移除。宿主只按工作区 mode 绑定 `tavern-rp` 或 `tavern-novel`，不会再产生该预设的新会话。
+
+## 工具箱
+
+酒馆会话里有一个可拖动的悬浮工具箱图标，包含五个面板：
+
+| 面板 | 内容 |
+|---|---|
+| 提示词编排 | 12 个角色块 / 7 个导演块；拖拽排序、启停、编辑、预览、恢复默认 |
+| Agent 编排 | 每幕发言上限、上下文预算、玩家点名优先、导演与角色各自的模型 |
+| 角色卡 | 角色卡 CRUD，导入/导出单文件 `.charc` |
+| 世界书 | 工作区级条目编辑与触发预览，整本导入/导出 `.world` |
+| 用量统计 | 工作区/会话 token、输入输出拆分、上下文占用、缓存命中率 |
+
+## 数据布局
+
+全部落在酒馆工作区内：
+
+```text
+<tavern>/
+  .dshtavern/
+    tavern.json              # 标记：mode / title / tavernId
+    worldbook.json           # 工作区级世界书
+    state/agent.json         # Agent 编排设置（缺失即用默认值）
+    stories/<session>/
+      stage.jsonl            # 舞台：追加写的旁白与台词
+      world.json             # 导演私有：场景 / 事实 / 未揭示剧情
+      beats/<timestamp>.json # 每次 beat 的完整证据
+  characters/<id>.charc      # 角色卡
+  prompts/prompt.json        # 角色提示词编排
+  prompts/director.json      # 导演提示词编排
+```
 
 ## 使用
 
-安装并加载后，侧栏出现「酒馆」入口。打开面板即可：
+安装并加载后，侧栏出现「酒馆」入口：
 
-1. **新建酒馆**：填名称（可再指定绝对目录）→ 创建目录、原子写入 `.dshtavern/tavern.json`、注册为 DSH 工作区；
-2. 列表里显示所有酒馆工作区，可**取消标记**（二次确认；保留目录与会话）；
+1. **新建酒馆**：填名称（可再指定绝对目录）→ 创建目录、原子写入标记、注册为 DSH 工作区；
+2. 列表显示所有酒馆工作区，可**取消标记**（二次确认；保留目录与会话）；
 3. 「收编已有工作区」把已有目录标记为酒馆。
 
-面板会自动刷新（挂载时、每几秒、窗口重新获得焦点时、每次操作后）；字号随视口宽度放大：1280 / 1600 / 1920 / 2300 / 2560px 各有一档，2K 屏比 1080p 明显更大。
-
-宿主提供 `GET /tavern/state`、`POST /tavern/create|adopt|untag` 四个 loopback-only JSON 路由，浏览器半直接调用。
+创建时必须选择模式（角色扮演 / 小说），创建后不可更改。面板自动刷新（挂载时、每 4 秒、窗口重新获得焦点时、每次操作后）。
 
 ## 开发
 
 ```sh
 pnpm install
-pnpm build
-pnpm test
+pnpm build      # 宿主 tsc + 浏览器半 tsdown
+pnpm test       # 219 项，全离线
+pnpm typecheck
 ```
 
-## 安装到 DSH profile（本地链接）
+## 安装
 
-先用 web 模板建一个自定义 profile，再安装本包：
+安装在当前运行的 `web` profile：
 
 ```sh
 cd <deepseek-harness checkout>
-pnpm dsh --profile tavern --from-default-profile web --dump-config
-pnpm dsh plugin --profile tavern add D:\GameProject\DSHTavern
-pnpm dsh --profile tavern --dump-config
+pnpm dsh plugin --profile web add D:/project/DSHTavern
 ```
 
-注意：`dsh plugin` 自己创建的 profile 以 `@deepseek-ai/dsh-base` 为底，不含 workspace registry；本插件的 `ctx.tavernWorkspaces` 需要 web 层，所以必须从 web 模板创建 profile。
+注意两点：
 
-如果目标就是当前运行的 `web` profile（本机开发常用），直接安装即可：
-
-```sh
-cd <deepseek-harness checkout>
-pnpm dsh plugin --profile web add D:\GameProject\DSHTavern
-```
-
-或者让 agent 用 `plugin_manager` 的 `install_bundle` 安装同一个绝对路径。
+- `dsh plugin` 自建的 profile 以 `@deepseek-ai/dsh-base` 为底，不含 workspace registry。本插件的 `ctx.tavernWorkspaces` 依赖 web 层，所以自定义 profile 必须用 `--from-default-profile web` 创建。
+- 路径用正斜杠。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
 
 ### 改了源码之后
 
-1. `pnpm build` 重新生成 `lib/`（宿主 `tsc` + 浏览器半 `tsdown`）；
+1. `pnpm build` 重新生成 `lib/`；
 2. 浏览器半由 client-hmr 按 `lib/client.js` 的改动自动热替换；
-3. 宿主半在 profile HMR 的下一次 reconcile 时替换（例如用 `plugin_manager set_plugin` 把本插件禁用再启用，或重启 DSH）。
+3. 宿主半在 profile HMR 的下一次 reconcile 时替换（用 `plugin_manager set_plugin` 禁用再启用，或重启 DSH）。
 
 ## 安装到桌面版（Electron）
 
@@ -73,11 +98,4 @@ pnpm dsh plugin --profile web add D:\GameProject\DSHTavern
 error: profile "desktop" is managed exclusively by the Electron application
 ```
 
-在 GUI 里安装：
-
-1. 侧栏打开「插件 / Plugins」；
-2. 点 **Add plugin / 添加插件**；
-3. 输入本地绝对路径 `D:\GameProject\DSHTavern`，确认信任后安装；
-4. 桌面版启用了 HMR，通常无需重启即可生效；若提示需要重启，重启应用。
-
-安装后侧栏出现「酒馆」入口。桌面版与本地开发的 DSH 都是 0.2.1-rc.2，`engines.dsh` 与 peer 版本匹配。
+在 GUI 里安装：侧栏打开「插件」→「添加插件」→ 输入本地绝对路径 → 确认信任后安装。桌面版启用了 HMR，通常无需重启。

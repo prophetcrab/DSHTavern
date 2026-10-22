@@ -1,10 +1,13 @@
 /**
- * DSHTavern browser half: the tavern workspace panel.
+ * DSH-Tavern browser half: the tavern panel, sidebar entry, and toolbox seats.
  *
  * Registers the sidebar entry and the main panel. The panel lists registered
  * tavern workspaces, creates a new tavern (directory + marker + DSH workspace
  * registration) and can adopt an existing workspace; the Host half owns every
  * filesystem and registry mutation behind `/tavern/*` JSON routes.
+ *
+ * This bundle also registers the invisible composer detector and the frame
+ * overlay that together draw the in-session toolbox.
  *
  * Typography and spacing scale through `--tv-scale`, raised by media queries so
  * 2K/4K viewports get larger text instead of the same 13px as a 1080p window.

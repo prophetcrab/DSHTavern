@@ -1,5 +1,5 @@
 /**
- * Native DSHTavern character cards.
+ * Native DSH-Tavern character cards.
  *
  * One card per character, stored as `<workspace>/characters/<id>.charc`
  * (UTF-8 JSON with a `.charc` extension so tavern data is distinguishable from

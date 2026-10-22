@@ -1,9 +1,15 @@
 /**
- * DSHTavern host plugin: identifies tavern workspaces by a marker file.
+ * DSH-Tavern host plugin: runs SillyTavern-style role-play on the DeepSeek Harness.
  *
- * The marker is the single source of truth for "this directory is a tavern".
- * DSH workspace records cannot carry plugin metadata, so the plugin scans the
- * registered workspace directories on demand instead of extending them.
+ * A tavern is a workspace carrying `.dshtavern/tavern.json`; the marker is the
+ * single source of truth for "this directory is a tavern", so the plugin scans
+ * registered workspace directories on demand instead of extending the DSH
+ * workspace record, which cannot carry plugin metadata.
+ *
+ * The plugin owns three things beyond the marker: it assembles the workspace's
+ * system prompt, it replaces the agent loop's model call with a directed beat
+ * (one director call, then one isolated call per speaking character), and it
+ * serves the toolbox's `/tavern/*` routes.
  * @module dshtavern
  */
 import { randomUUID } from 'node:crypto'
@@ -856,7 +862,9 @@ export class TavernWorkspaceService extends Service {
     if (presets?.remoteExportList === undefined) return
     const marker = Symbol.for('dshtavern.roster-filter')
     if ((presets as Record<symbol, unknown>)[marker] === true) return
-    const hidden = new Set(['tavern', 'tavern-rp', 'tavern-novel'])
+    // Only the two live presets exist; the legacy `tavern` row was removed
+    // because no session ever selected it and nothing binds it.
+    const hidden = new Set(['tavern-rp', 'tavern-novel'])
     const original = presets.remoteExportList.bind(presets)
     presets.remoteExportList = async () => {
       const roster = await original()

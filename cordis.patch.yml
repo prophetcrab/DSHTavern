@@ -5,7 +5,7 @@
 #   prompt rows: host assembly is the sole system-prompt source, and the
 #   presets give tavern sessions a clean scope without tools/persona. They are
 #   hidden from the global preset roster and bound automatically by workspace
-#   mode (role-play / novel). `tavern` is the legacy id kept for old sessions.
+#   mode (role-play / novel).
 - insert:
     - id: dshtavern
       name: dshtavern
@@ -16,21 +16,12 @@
     - id: dshtavern-stats
       name: 'dshtavern/stats'
 - insert:
-    - id: preset-tavern
-      name: '@deepseek-ai/dsh-agent-preset'
-      config:
-        id: tavern
-        name: 酒馆（旧）
-        description: 旧版酒馆会话的兼容 preset，不再用于新会话。
-        order: 10
-        plugins: []
-- insert:
     - id: preset-tavern-rp
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: tavern-rp
         name: 酒馆 · 角色扮演
-        description: 使用该酒馆工作区编排的角色扮演提示词。
+        description: 角色扮演会话的作用域。系统提示词由工作区编排提供，本预置只负责给会话一个干净的起点。
         order: 11
         plugins: []
 - insert:
@@ -39,6 +30,6 @@
       config:
         id: tavern-novel
         name: 酒馆 · 小说
-        description: 小说模式（提示词块待实现）。
+        description: 小说模式会话的作用域。提示词块与编排尚未实现，目前发出消息不会得到回复。
         order: 12
         plugins: []

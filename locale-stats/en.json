@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH-Tavern · Usage",
+    "description": "Token spend, context occupancy, and cache-hit rate for a tavern workspace. Figures come from the durable session projections, so a reload or replay reports the same numbers. Removing this row unregisters its routes and the toolbox entry reports the feature as unavailable."
+  }
+}

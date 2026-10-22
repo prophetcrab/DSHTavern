@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH-Tavern",
+    "description": "为 DeepSeek Harness 提供 SillyTavern 式角色扮演。一个酒馆就是一个带 .dshtavern/tavern.json 标记的工作区，每个聊天是一条会话，每轮先由导演决定旁白、节奏与谁开口，再让每位开口的角色各发起一次独立调用。附带工具箱：角色卡、世界书、提示词编排、Agent 编排，以及可选的用量统计。"
+  }
+}

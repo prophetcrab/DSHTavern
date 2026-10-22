@@ -1,4 +1,4 @@
-# DSHTavern 文档
+# DSH-Tavern 文档
 
 架构与开发进度见 [architecture.md](architecture.md)；它是唯一事实来源，随每次改动更新。
 

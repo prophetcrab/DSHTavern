@@ -1,7 +1,7 @@
 {
   "name": "dshtavern",
   "version": "0.1.0",
-  "description": "Tavern workspaces for the DeepSeek Harness: a directory marker, workspace registry bridge, and later the tavern agent preset and Web panel.",
+  "description": "SillyTavern-style role-play for the DeepSeek Harness: a tavern is a workspace with a marker file, each chat is a session, and every beat is a director call plus one isolated call per speaking character.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -23,10 +23,14 @@
       "types": "./lib/types/stats/index.d.ts",
       "default": "./lib/stats/index.js"
     },
+    "./locale/*.json": "./locale/*.json",
+    "./stats/locale/*.json": "./locale-stats/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "locale",
+    "locale-stats",
     "cordis.patch.yml",
     "README.md"
   ],

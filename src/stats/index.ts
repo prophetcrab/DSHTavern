@@ -1,5 +1,5 @@
 /**
- * Tavern usage statistics sub-plugin (host half).
+ * DSH-Tavern usage statistics sub-plugin (host half).
  *
  * A separate plugin row (`dshtavern-stats` in the bundle patch) that serves one
  * read-only route for the tavern toolbox: token spend per workspace and per
@@ -10,8 +10,8 @@
  * projection. Nothing is counted here that the session log does not already
  * record, so a reload or a replay reports the same numbers.
  *
- * Removing the `dshtavern-stats` row unregisters the route; the toolbox hides
- * its entry because the probe fails.
+ * Removing the `dshtavern-stats` row unregisters the routes; the toolbox entry
+ * then reports the feature as unavailable, and the tavern plugin is unaffected.
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'

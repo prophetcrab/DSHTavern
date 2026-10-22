@@ -1,4 +1,4 @@
-# DSHTavern 架构与进度
+# DSH-Tavern 架构与进度
 
 > 本文是这个插件项目的唯一架构与进度说明，每次改动同步更新。
 > 最后更新：2026-10-22 ｜ 插件版本：0.1.0 ｜ 依赖 dsh `>=0.2.1-rc.2 <0.3.0`
@@ -10,7 +10,7 @@
 插件分两半交付：
 
 - **宿主半**（Node）：一个 Cordis Service，提供工作区标记、提示词装配、模型调用拦截与编排、HTTP 路由。
-- **浏览器半**（Web）：侧栏「酒馆」面板、会话内悬浮工具箱、角色卡/世界书/提示词编排三个子窗口。
+- **浏览器半**（Web）：侧栏「酒馆」面板、会话内悬浮工具箱，以及提示词编排 / Agent 编排 / 角色卡 / 世界书 / 用量统计五个子窗口。
 
 ## 二、运行形态
 
@@ -25,7 +25,9 @@
 | `dsh.client.platform` | `web` | 浏览器半运行平台 |
 | `dsh.client.inject` | layout、sidebar | 注入依赖的客户端 UI 包 |
 
-`cordis.patch.yml` 插入 5 行：`dshtavern` 本体、`dshtavern-stats` 子插件，以及 `preset-tavern`（旧 id，兼容）、`preset-tavern-rp`、`preset-tavern-novel` 三个内部 preset。三个 preset 都从全局 preset 名单中隐藏，由宿主按工作区 `mode` 自动绑定。
+`cordis.patch.yml` 插入 4 行：`dshtavern` 本体、`dshtavern-stats` 子插件，以及 `preset-tavern-rp`、`preset-tavern-novel` 两个内部 preset。两个 preset 都从全局 preset 名单中隐藏，由宿主按工作区 `mode` 自动绑定。
+
+旧版的 `preset-tavern`（`id: tavern`）已移除：宿主只绑定 `tavern-rp` / `tavern-novel`，且该 id 在本机所有会话的 `agentPreset` 投影中从未出现，没有遗留会话依赖它。
 
 浏览器半用 tsdown 打成 `lib/client.js`：CJS 闭包工厂，React 从外部注入，由客户端的模块系统加载。
 

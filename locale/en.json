@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH-Tavern",
+    "description": "SillyTavern-style role-play on the DeepSeek Harness. A tavern is a workspace marked by .dshtavern/tavern.json, each chat is a session, and every turn is a director call (narration, pacing, who speaks) followed by one isolated call per speaking character. Ships a toolbox for character cards, worldbooks, prompt and agent orchestration, and optional usage statistics."
+  }
+}
