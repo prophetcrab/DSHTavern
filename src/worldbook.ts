@@ -97,6 +97,9 @@ export const WORLDBOOK_ACTIVE_CHARS_MAX = 6000
 /** Default scan window when an entry names no depth. */
 export const WORLDBOOK_DEFAULT_DEPTH = 6
 
+/** Recent stage lines the lore scan covers by default. */
+export const WORLDBOOK_SCAN_LINES = 20
+
 /** A worldbook file or entry is structurally invalid. */
 export class WorldbookInvalidError extends Error {
   constructor(message: string, readonly path?: string) {
@@ -489,7 +492,7 @@ function isMissing(error: unknown): boolean {
 }
 
 /** Stage lines as scan text, newest last. */
-export function stageScanLines(stage: readonly StageEntry[], limit = 20): string[] {
+export function stageScanLines(stage: readonly StageEntry[], limit = WORLDBOOK_SCAN_LINES): string[] {
   return stage.slice(-limit).map(entry => entry.kind === 'narration'
     ? entry.text
     : `${entry.speakerName ?? entry.speaker ?? ''}：${entry.text}`)

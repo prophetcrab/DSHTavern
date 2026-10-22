@@ -14,6 +14,7 @@ import { createElement, useEffect, useRef, useState, useSyncExternalStore } from
 import type { ReactElement } from 'react'
 import { PANEL_CSS, STORY_CSS, TOOLBOX_CSS } from './styles.js'
 import { PromptOrchestration } from './prompt.js'
+import { AgentPanel } from './agent.js'
 import { CharacterCardTool } from './characters.js'
 import { WorldbookWorkbench } from './worldbook.js'
 import { UsagePanel } from './stats.js'
@@ -34,7 +35,7 @@ export interface TavernToolboxStation {
 }
 
 /** Tool identities shown by the toolbox. */
-export type TavernToolId = 'prompt' | 'characters' | 'worldbooks' | 'usage' | 'settings'
+export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'worldbooks' | 'usage' | 'settings'
 
 /** Launcher position in viewport pixels (top-left corner). */
 export interface FabPosition {
@@ -298,6 +299,7 @@ interface ToolEntry {
 
 const TOOLS: readonly ToolEntry[] = [
   { id: 'prompt', glyph: '编', label: '提示词编排', enabled: true },
+  { id: 'agent', glyph: '演', label: 'Agent 编排', enabled: true },
   { id: 'characters', glyph: '卡', label: '角色卡', enabled: true },
   { id: 'worldbooks', glyph: '书', label: '世界书', enabled: true },
   { id: 'usage', glyph: '量', label: '用量统计', enabled: true },
@@ -321,11 +323,37 @@ function LauncherIcon(): ReactElement {
   createElement('path', { d: 'M10.2 13v1.8h3.6V13' }))
 }
 
+/** Width of one popover tile, matching the CSS grid column. */
+const TOOL_TILE_WIDTH = 78
+
+/** Height of one popover tile, matching the CSS tile height. */
+const TOOL_TILE_HEIGHT = 64
+
+/** Popover padding and gap, matching the CSS. */
+const TOOL_POPOVER_PADDING = 10
+const TOOL_POPOVER_GAP = 6
+
+/**
+ * Popover size for the registered tool count.
+ *
+ * The anchor math needs the real box, and the tile count is what the grid
+ * wraps on, so both derive from {@link TOOLS} instead of a hardcoded box that
+ * goes stale whenever a tool is added.
+ * @returns the popover's width and height in CSS pixels.
+ */
+export function toolPopoverSize(): { width: number; height: number } {
+  const columns = 2
+  const rows = Math.ceil(TOOLS.length / columns)
+  return {
+    width: columns * TOOL_TILE_WIDTH + (columns - 1) * TOOL_POPOVER_GAP + TOOL_POPOVER_PADDING * 2,
+    height: rows * TOOL_TILE_HEIGHT + (rows - 1) * TOOL_POPOVER_GAP + TOOL_POPOVER_PADDING * 2,
+  }
+}
+
 /** Icon popover anchored to the launcher. */
 function ToolboxPopover(position: FabPosition): ReactElement | null {
   if (!state.open || state.station === null) return null
-  const width = 182
-  const height = 154
+  const { width, height } = toolPopoverSize()
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth
   const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight
   const left = Math.min(Math.max(8, position.left + FAB_SIZE / 2 - width / 2), viewportWidth - width - 8)
@@ -388,7 +416,13 @@ function ToolWindow(): ReactElement | null {
         workspaceTitle: station.workspaceTitle,
         workspacePath: station.workspacePath,
       })
-      : tool === 'characters'
+      : tool === 'agent'
+        ? createElement(AgentPanel, {
+          workspaceId: station.workspaceId,
+          workspaceTitle: station.workspaceTitle,
+          workspacePath: station.workspacePath,
+        })
+        : tool === 'characters'
         ? createElement(CharacterCardTool, {
           workspaceId: station.workspaceId,
           workspaceTitle: station.workspaceTitle,

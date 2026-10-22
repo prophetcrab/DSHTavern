@@ -16,6 +16,7 @@ import { promptBlockViews, renderPromptText } from './prompt-layout.js'
 import type { StageEntry, WorldState } from './stage.js'
 import { activateEntries, renderLore, stageScanLines } from './worldbook.js'
 import type { WorldbookEntry } from './worldbook.js'
+import { WORLDBOOK_ACTIVE_CHARS_MAX, WORLDBOOK_ACTIVE_MAX, WORLDBOOK_SCAN_LINES } from './worldbook.js'
 import { renderStage } from './stage.js'
 
 /** One cast member as the director sees it; never the full card. */
@@ -74,6 +75,37 @@ export const MAX_SPEECHES_PER_BEAT = 3
  * @param input - world snapshot, cast roster, and visible stage.
  * @returns the system prompt text.
  */
+/** Runtime knobs one orchestrated beat reads; every field defaults to the shipped constant. */
+export interface BeatLimits {
+  /** Character speeches one player turn may produce. */
+  readonly maxSpeechesPerBeat?: number
+  /** Staged lines every prompt carries. */
+  readonly stageWindow?: number
+  /** Recent stage lines the worldbook scan covers. */
+  readonly loreScanLines?: number
+  /** Worldbook entries one request may inject. */
+  readonly loreMaxEntries?: number
+  /** Worldbook characters one request may inject. */
+  readonly loreMaxChars?: number
+  /** Player utterance length forwarded to the model. */
+  readonly playerInputMax?: number
+  /** Tell the director to alternate speakers. */
+  readonly rotateSpeakers?: boolean
+}
+
+/** Resolve the optional knobs against the shipped constants. */
+function limitsOf(limits: BeatLimits | undefined): Required<BeatLimits> {
+  return {
+    maxSpeechesPerBeat: limits?.maxSpeechesPerBeat ?? MAX_SPEECHES_PER_BEAT,
+    stageWindow: limits?.stageWindow ?? STAGE_WINDOW,
+    loreScanLines: limits?.loreScanLines ?? WORLDBOOK_SCAN_LINES,
+    loreMaxEntries: limits?.loreMaxEntries ?? WORLDBOOK_ACTIVE_MAX,
+    loreMaxChars: limits?.loreMaxChars ?? WORLDBOOK_ACTIVE_CHARS_MAX,
+    playerInputMax: limits?.playerInputMax ?? PLAYER_INPUT_MAX,
+    rotateSpeakers: limits?.rotateSpeakers ?? true,
+  }
+}
+
 export function buildDirectorSystem(input: {
   readonly world: WorldState
   readonly cast: readonly CastMember[]
@@ -83,17 +115,22 @@ export function buildDirectorSystem(input: {
   readonly worldbook?: readonly WorldbookEntry[]
   /** The player's utterance for this beat, if any. */
   readonly playerInput?: string
+  /** Runtime knobs; omitted fields use the shipped constants. */
+  readonly limits?: BeatLimits
 }): string {
+  const limits = limitsOf(input.limits)
   const roster = input.cast.length === 0
     ? '（当前没有角色卡）'
     : input.cast.map(member => `- ${member.id} | ${member.name} | ${member.brief}`).join('\n')
-  const transcript = renderStage(input.stage.slice(-STAGE_WINDOW)) || '（剧情尚未开始）'
+  const transcript = renderStage(input.stage.slice(-limits.stageWindow)) || '（剧情尚未开始）'
   const recentSpeaker = lastSpeakerName(input.stage)
   const lore = activateEntries({
     entries: input.worldbook ?? [],
     scanText: input.playerInput ?? '',
-    recentLines: stageScanLines(input.stage),
+    recentLines: stageScanLines(input.stage, limits.loreScanLines),
     audience: 'director',
+    maxEntries: limits.loreMaxEntries,
+    maxChars: limits.loreMaxChars,
   })
   const loreText = renderLore([...lore.before, ...lore.after, ...lore.tail])
   const state = new Map<string, string>([
@@ -108,7 +145,7 @@ export function buildDirectorSystem(input: {
     return injected === undefined ? view : { ...view, content: injected }
   })
   const rendered = renderPromptText(views)
-  const rotation = recentSpeaker === undefined
+  const rotation = recentSpeaker === undefined || !limits.rotateSpeakers
     ? []
     : [`上一个开口的是「${recentSpeaker}」。多人在场时轮换发言：除非剧情明确要求同一个人连续回应，否则请换另一个人。`, '']
   return [rendered, ...rotation].join('\n')
@@ -143,6 +180,7 @@ export function buildDirectorContinuation(input: {
   readonly layout: PromptLayout
   readonly worldbook?: readonly WorldbookEntry[]
   readonly playerInput?: string
+  readonly limits?: BeatLimits
 }, spoken: readonly CastMember[]): string {
   const base = buildDirectorSystem(input)
   const last = spoken[spoken.length - 1]
@@ -217,16 +255,21 @@ export function buildCharacterSystem(input: {
   readonly playerInput?: string
   /** Narration this beat already staged, so its keywords count too. */
   readonly narration?: string
+  /** Runtime knobs; omitted fields use the shipped constants. */
+  readonly limits?: BeatLimits
 }): string {
-  const contextText = renderStage(input.stage.slice(-STAGE_WINDOW))
+  const limits = limitsOf(input.limits)
+  const contextText = renderStage(input.stage.slice(-limits.stageWindow))
   const triggerText = [contextText, input.narration ?? '', input.playerInput ?? '']
     .filter(part => part.length > 0)
     .join('\n')
   const lore = activateEntries({
     entries: input.worldbook ?? [],
     scanText: [input.narration ?? '', input.playerInput ?? ''].join('\n'),
-    recentLines: stageScanLines(input.stage),
+    recentLines: stageScanLines(input.stage, limits.loreScanLines),
     audience: 'character',
+    maxEntries: limits.loreMaxEntries,
+    maxChars: limits.loreMaxChars,
   })
   const views = promptBlockViews(input.layout).map((view) => {
     if (view.id === 'worldbook-before') return { ...view, content: renderLore(lore.before) }
@@ -376,6 +419,29 @@ export function resolveSpeaker(
   return cast.find(member => member.id === wanted)
     ?? cast.find(member => member.name === wanted)
     ?? cast.find(member => member.name.toLowerCase() === wanted.toLowerCase())
+}
+
+/**
+ * Find the cast member the player addressed by name.
+ *
+ * A name counts only as a whole token: a two-character name that happens to be
+ * a substring of an unrelated word would otherwise hijack every beat. When the
+ * player names several characters, the earliest mention wins.
+ * @param playerInput - the player's utterance.
+ * @param cast - cast roster.
+ * @returns the most-mentioned character, or `undefined`.
+ */
+export function mentionedSpeaker(
+  playerInput: string,
+  cast: readonly CastMember[],
+): CastMember | undefined {
+  let best: { member: CastMember; at: number } | undefined
+  for (const member of cast) {
+    const at = playerInput.indexOf(member.name)
+    if (at === -1) continue
+    if (best === undefined || at < best.at) best = { member, at }
+  }
+  return best?.member
 }
 
 /** Block ids whose content comes from the active character card. */

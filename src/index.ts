@@ -18,7 +18,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, isAgentLoopRequest, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
@@ -44,7 +44,7 @@ import {
   parseDirectorReply,
   renderBeatMarkdown,
   resolveSpeaker,
-  MAX_SPEECHES_PER_BEAT,
+  mentionedSpeaker,
   PLAYER_INPUT_MAX,
 } from './orchestrator.js'
 import { fromCardEntries } from './worldbook.js'
@@ -52,6 +52,14 @@ import { buildPreview } from './preview.js'
 import type { PromptPreview } from './preview.js'
 import type { BeatRecord, BeatSegment, CastMember, DirectorDecision } from './orchestrator.js'
 import { appendStage, readStage, readWorld, storyDirectory, writeWorld } from './stage.js'
+import {
+  AgentConfigInvalidError,
+  defaultAgentConfig,
+  normalizeAgentConfig,
+  readAgentConfig,
+  writeAgentConfig,
+} from './agent-config.js'
+import type { AgentModelChoice, TavernAgentConfig } from './agent-config.js'
 import {
   WorldbookInvalidError,
   exportWorldbookText,
@@ -943,10 +951,14 @@ export class TavernWorkspaceService extends Service {
     const world = await readWorld(cwd, story)
     const stage = await readStage(cwd, story)
     const cast = cards.map(card => ({ id: card.id, name: card.name, brief: cardBrief(card) }))
-    const playerInput = lastUserText(options)
+    const config = await readAgentConfig(cwd)
+    const playerInput = lastUserText(options, config.playerInputMax)
     const layout = await readPromptLayout(cwd)
     const directorLayout = await readPromptLayout(cwd, 'director')
     const workspaceBook = await readWorldbook(cwd)
+    // A player naming a character outranks the director's pick; the director is
+    // a fallback that keeps the scene moving, not the final word on who answers.
+    const addressed = config.honorPlayerMention ? mentionedSpeaker(playerInput, cast) : undefined
 
     const segments: BeatSegment[] = []
     const spoken: CastMember[] = []
@@ -959,25 +971,30 @@ export class TavernWorkspaceService extends Service {
     // nothing to add, or the cap is reached. Each turn is a fresh director call
     // over the stage as extended by the previous one.
     let inner = ''
-    for (let turn = 0; turn < MAX_SPEECHES_PER_BEAT; turn += 1) {
+    for (let turn = 0; turn < config.maxSpeechesPerBeat; turn += 1) {
       const directorSystem = turn === 0
         ? buildDirectorSystem({
           world, cast, stage, layout: directorLayout,
-          worldbook: workspaceBook.entries, playerInput,
+          worldbook: workspaceBook.entries, playerInput, limits: config,
         })
         : buildDirectorContinuation({
           world, cast, stage, layout: directorLayout,
-          worldbook: workspaceBook.entries, playerInput,
+          worldbook: workspaceBook.entries, playerInput, limits: config,
         }, spoken)
       const directorResult = await this.complete(options, directorSystem, [
         { role: 'user', text: turn === 0
           ? playerInput.length === 0 ? '（玩家保持了沉默）' : playerInput
           : '（继续这一幕。）' },
-      ])
+      ], config.directorModel)
       addUsage(beatUsage, directorResult.usage)
       const directorReply = directorResult.text
       const decision = parseDirectorReply(directorReply)
-      const speaker = resolveSpeaker(decision, cast)
+      const resolved = resolveSpeaker(decision, cast)
+      // Order: the character the player addressed (first turn only), the
+      // director's pick, then the configured fallback for an unusable reference.
+      const speaker = (turn === 0 ? addressed : undefined)
+        ?? resolved
+        ?? (config.unknownSpeaker === 'first' ? cast[0] : undefined)
       if (turn === 0) inner = decision.inner
 
       const turnRecord: BeatTurn = { directorSystem, directorReply, decision }
@@ -1009,11 +1026,12 @@ export class TavernWorkspaceService extends Service {
         worldbook: [...workspaceBook.entries, ...fromCardEntries(card.entries)],
         playerInput,
         narration: decision.narration,
+        limits: config,
       })
       const characterMessage = buildCharacterMessage(decision.narration, playerInput)
       const characterResult = await this.complete(options, characterSystem, [
         { role: 'user', text: characterMessage },
-      ])
+      ], config.characterModel)
       addUsage(beatUsage, characterResult.usage)
       const speech = characterResult.text.trim()
       turnRecord.characterSystem = characterSystem
@@ -1075,22 +1093,28 @@ export class TavernWorkspaceService extends Service {
    * @param options - the intercepted request, providing provider and model.
    * @param system - system prompt for this call.
    * @param messages - user turns.
+   * @param choice - per-role model override; omitted follows the session.
    * @returns the concatenated text output and the call's usage, when reported.
    */
   private async complete(
     options: GenerateOptions,
     system: string,
     messages: readonly { role: 'user'; text: string }[],
+    choice?: AgentModelChoice,
   ): Promise<{ text: string; usage?: TokenUsage }> {
     const stream = this.ctx.llm.stream({
-      provider: options.provider,
-      model: options.model,
+      provider: choice?.provider ?? options.provider,
+      model: choice?.model ?? options.model,
       system,
       messages: messages.map(message => createUserMessage({
         content: [{ type: 'text', text: message.text }],
         source: { kind: 'user' },
       })),
-      ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+      // A role-specific effort only applies to a role-specific model: the
+      // session's effort names levels the session model accepts.
+      ...(choice?.reasoningEffort !== undefined
+        ? { reasoningEffort: ReasoningEffortId(choice.reasoningEffort) }
+        : options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
     })
     let text = ''
     let usage: TokenUsage | undefined
@@ -1319,6 +1343,16 @@ export class TavernWorkspaceService extends Service {
       }), 'dshtavern: /tavern/worldbook/transfer')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
+        path: '/tavern/agent',
+        handler: (req, res) => this.handleAgentConfig(req, res),
+      }), 'dshtavern: /tavern/agent')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: '/tavern/models',
+        handler: (req, res) => this.handleModelCatalog(req, res),
+      }), 'dshtavern: /tavern/models')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
         path: '/tavern/preview',
         handler: (req, res) => this.handlePreview(req, res),
       }), 'dshtavern: /tavern/preview')
@@ -1520,6 +1554,105 @@ export class TavernWorkspaceService extends Service {
     }
   }
 
+  /**
+   * Read one workspace's agent orchestration settings.
+   * @param workspaceId - registered tavern workspace id.
+   * @returns the stored config, or the defaults when absent.
+   */
+  async agentConfig(workspaceId: string): Promise<TavernAgentConfig> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    return readAgentConfig(workspace.path)
+  }
+
+  /**
+   * Replace one workspace's agent orchestration settings.
+   * @param workspaceId - registered tavern workspace id.
+   * @param value - full config payload, validated before writing.
+   * @returns the stored config.
+   */
+  async saveAgentConfig(workspaceId: string, value: unknown): Promise<TavernAgentConfig> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    return writeAgentConfig(workspace.path, value)
+  }
+
+  /**
+   * Read one workspace's agent orchestration settings plus the defaults.
+   * @param workspaceId - registered tavern workspace id.
+   * @returns the stored config, the defaults, and every field's bounds.
+   */
+  async agentConfigView(workspaceId: string): Promise<{
+    config: TavernAgentConfig
+    defaults: TavernAgentConfig
+    status: 'stored' | 'default'
+  }> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const stored = await readAgentConfig(workspace.path)
+    const isDefault = JSON.stringify(stored) === JSON.stringify(defaultAgentConfig())
+    return { config: stored, defaults: defaultAgentConfig(), status: isDefault ? 'default' : 'stored' }
+  }
+
+  /** List every provider route and its models, for the model picker. */
+  async modelCatalog(): Promise<readonly { provider: string; name: string; models: readonly { id: string; name: string }[] }[]> {
+    const routes = this.ctx.llm.listProviders()
+    const catalog: { provider: string; name: string; models: { id: string; name: string }[] }[] = []
+    for (const route of routes) {
+      let models: { id: string; name: string }[] = []
+      try {
+        models = (await this.ctx.llm.listModels(route.id)).map(model => ({ id: model.id, name: model.name }))
+      } catch {
+        // A provider whose catalog is unavailable still belongs in the list so
+        // the user can see the route exists; it simply offers no models.
+      }
+      catalog.push({ provider: route.id, name: route.name, models })
+    }
+    return catalog
+  }
+
+  /** Read, replace, or reset one workspace's agent orchestration settings. */
+  private async handleAgentConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    try {
+      const method = req.method ?? 'GET'
+      if (method === 'GET') {
+        sendJson(res, 200, { ok: true, ...await this.agentConfigView(workspaceIdFromUrl(req)) })
+        return
+      }
+      if (method !== 'POST') {
+        res.setHeader('allow', 'GET, POST')
+        sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
+        return
+      }
+      const body = await readJsonObject(req)
+      const workspaceId = optionalString(body, 'workspaceId')
+      if (workspaceId === undefined) throw new AgentConfigInvalidError('缺少 workspaceId')
+      const config = body.reset === true
+        ? await this.saveAgentConfig(workspaceId, defaultAgentConfig())
+        : await this.saveAgentConfig(workspaceId, body.config)
+      sendJson(res, 200, {
+        ok: true,
+        config,
+        defaults: defaultAgentConfig(),
+        status: 'stored',
+      })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
+  /** List provider routes and models for the model picker. */
+  private async handleModelCatalog(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    if (req.method !== 'GET') {
+      methodNotAllowed(res, 'GET')
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, providers: await this.modelCatalog() })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
   /** Assemble one scope's prompt for inspection. */
   private async handlePreview(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!allowLoopback(req, res)) return
@@ -1610,6 +1743,7 @@ export class TavernWorkspaceService extends Service {
       || error instanceof PromptLayoutVersionError
       || error instanceof CharacterCardInvalidError
       || error instanceof WorldbookInvalidError
+      || error instanceof AgentConfigInvalidError
       ? 400
       : error instanceof TavernWorkspaceNotFoundError ? 404 : 500
     if (status === 500) this.ctx.logger.warn(`[dshtavern] tavern request failed: ${String(error)}`)
@@ -1730,7 +1864,17 @@ function cardBrief(card: CharacterCard): string {
  * @param options - the intercepted request.
  * @returns the last player-authored message text, bounded to the accepted size.
  */
-export function lastUserText(options: GenerateOptions): string {
+/**
+ * Extract the player's latest utterance from a loop-built request.
+ *
+ * The loop appends harness-authored user messages after the player's own — the
+ * runtime-context snapshot and skill-change reminders — so those are skipped by
+ * kind rather than position.
+ * @param options - the intercepted loop request.
+ * @param max - longest prefix forwarded; defaults to the shipped limit.
+ * @returns the player's text, or an empty string when the turn has none.
+ */
+export function lastUserText(options: GenerateOptions, max: number = PLAYER_INPUT_MAX): string {
   for (let index = options.messages.length - 1; index >= 0; index -= 1) {
     const message = options.messages[index]
     if (message === undefined || message.role !== 'user') continue
@@ -1740,7 +1884,7 @@ export function lastUserText(options: GenerateOptions): string {
       .map(part => (part as { text: string }).text)
       .join('\n')
       .trim()
-    if (text.length > 0) return text.slice(0, PLAYER_INPUT_MAX)
+    if (text.length > 0) return text.slice(0, max)
   }
   return ''
 }

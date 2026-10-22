@@ -68,6 +68,7 @@
     tavern.json              # 标记：schema 1 / kind / tavernId / createdAt / mode / title
     worldbook.json           # 工作区级世界书
     state/last-request.json  # 最近一次最终请求快照（调试用）
+    state/agent.json         # Agent 编排设置；缺失即使用默认值
     stories/<session>/
       stage.jsonl            # 舞台，append-only，每行一条 narration/speech
       world.json             # 导演私有：scene / facts / hidden
@@ -107,6 +108,8 @@
 | `/tavern/characters/transfer` | GET/POST | 导出单张卡为 `.charc`（`?id=`）／导入 `.charc` |
 | `/tavern/worldbook` | GET/POST | 读/写世界书 |
 | `/tavern/worldbook/transfer` | GET/POST | 导出整本世界书为 `.world`／导入 `.world`（替换） |
+| `/tavern/agent` | GET/POST | 读/写/重置工作区的 Agent 编排设置 |
+| `/tavern/models` | GET | 供应商路由与其模型列表，供模型选择器使用 |
 | `/tavern/preview` | GET | 不调用模型的提示词预览 |
 | `/tavern-stats/ping` | GET | 子插件存活探测（客户端据此判断是否启用） |
 | `/tavern-stats/state` | GET | 用量快照：`?workspaceId=`、可选 `?sessionId=` |
@@ -139,11 +142,12 @@
 - 角色卡：原生格式 CRUD（`characters/<id>.charc`，schema 1，单卡上限 256KB）；导入/导出为单文件 `.charc`，导入时重新分配 id 与时间戳，因此导入到来源工作区得到的是副本而非覆盖。
 - 世界书：工作区级条目编辑、关键词触发预览；四种次要词逻辑、三种插入位置、`director` 专属条目、8 条 / 6000 字预算。整本导出为 `.world`（带 `kind: dshtavern.worldbook` 的封套，含全部条目），导入替换当前整本；也接受裸条目数组便于手写。
 - 两个侧栏头部采用「标题行 + 操作行」两行结构：标题与计数占一行，操作按钮等分下一行。加按钮不会再把标题挤成 0 宽。
+- Agent 编排面板：按「这一幕 / 上下文预算 / 角色分工模型」三组暴露运行时旋钮。每幕发言上限、角色可见舞台行数、世界书扫描行数与预算、玩家输入上限、轮换发言、玩家点名优先、无法解析时是否让首位角色顶替，以及导演 / 角色各自的模型与推理等级。设置存于 `<workspace>/.dshtavern/agent.json`，缺失时使用与旧常量完全一致的默认值。
 - 提示词编排：角色 12 块、导演 7 块；拖拽排序、启停、编辑、预览、恢复默认；只持久化与默认值的差异。卡片显示块的来源、字数与编辑入口，停用块以虚线边框和「已停用」标签区分；运行时填充的块标注「运行时」而非字数。预览面板的角色卡下拉直接读 `/tavern/characters`，打开即列出全部真实角色卡并默认选中第一张。
 - 角色扮演编排：导演决策 → 角色独立调用 → 分段渲染；实测多角色登场、线索按世界书逐层释放、跨轮舞台累积。
 - 自动绑定 preset；`rp` 与 `novel` 工作区分别绑定 `tavern-rp` / `tavern-novel`。
 - 用量统计子插件：工作区总量、当前会话用量、输入/输出拆分、上下文占用条、缓存命中率条、会话明细表；每 10 秒刷新。面板内容限宽 720px 居中，两卡两表双列自适应（窄窗降为单列并隐藏次要列）。实测面板数值与 DSH 自身状态栏一致（12.2k tokens、命中率 12.3%、上下文 1.05%）。
-- 测试与构建：`pnpm test` 199 项通过（16 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
+- 测试与构建：`pnpm test` 219 项通过（17 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
 
 ## 九、未完成与已知问题
 
