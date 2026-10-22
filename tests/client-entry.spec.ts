@@ -15,6 +15,10 @@ function mount(): CapturedEntry[] {
     // The entry registers the sidebar-marker observer through `ctx.effect`;
     // running the callback matches the real lifecycle and returns its disposer.
     effect: (callback: () => (() => void) | void) => callback(),
+    // The Trajectory record rides a service injection so a profile without the
+    // Conversation client half still loads; there is no such service here, so
+    // the callback simply never runs.
+    inject: (_names: string[], _callback: () => void) => {},
     slots: {
       inject: (_name: string, callback: () => () => void) => callback(),
       register: (options: Record<string, unknown>, component: (props: never) => unknown) => {

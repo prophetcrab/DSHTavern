@@ -4,7 +4,8 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "outDir": "lib/types/client",
-    "rootDir": "src/client"
-  }
+    "outDir": "lib/types",
+    "rootDir": "src"
+  },
+  "include": ["src/client/**/*.ts", "src/beat-log.ts"]
 }

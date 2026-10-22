@@ -81,6 +81,11 @@ import {
   truncationPoint,
 } from './regenerate.js'
 import type { RegenerationRecord, StoredBeat } from './regenerate.js'
+import { BEAT_RECORD_TYPE, buildBeatLog } from './beat-log.js'
+import type { BeatLogInput } from './beat-log.js'
+import { beatLogFromRecord } from './beat-log-host.js'
+import type { BeatLogModels } from './beat-log-host.js'
+import { appendPluginRecord } from '@deepseek-ai/dsh-session'
 import {
   AgentConfigInvalidError,
   defaultAgentConfig,
@@ -1044,6 +1049,29 @@ export class TavernWorkspaceService extends Service {
       }
       const opening = await this.openingBeatSegments(cwd, story, cards)
       if (opening.staged.length > 0) await appendStage(cwd, opening.staged, story)
+      // The opening writer is a model call like any other; log it so the turn's
+      // prompt is inspectable beside the beats that follow.
+      const openingSystem = opening.script?.system
+      if (openingSystem !== undefined) {
+        const script = opening.script as OpeningScript
+        this.appendBeatLog(story, {
+          at: script.generatedAt ?? new Date().toISOString(),
+          playerInput: '',
+          calls: [{
+            role: 'opening',
+            model: script.generatedBy === undefined
+              ? '未知'
+              : `${script.generatedBy.provider}/${script.generatedBy.model}`,
+            system: openingSystem,
+            message: script.message ?? '写开场。',
+            reply: script.segments
+              .map(segment => segment.kind === 'narration'
+                ? `[旁白] ${segment.text}`
+                : `[${segment.speakerName ?? '角色'}] ${segment.text}`)
+              .join('\n'),
+          }],
+        })
+      }
       const text = opening.segments.length > 0
         ? renderBeatMarkdown(opening.segments)
         : EMPTY_BEAT_NOTICE
@@ -1124,14 +1152,19 @@ export class TavernWorkspaceService extends Service {
       ], config.directorModel, replyBudgetChars(config, 'director'), config.reasoningReserveTokens)
       addUsage(beatUsage, directorResult.usage)
       let directorReply = directorResult.text
+      const directorRawReply = directorReply
+      let repairSystem: string | undefined
+      let repairMessage: string | undefined
       // One repair attempt when the director ignored the output contract. The
       // model has already decided the beat, so this asks it to restate the same
       // decision as JSON rather than to decide again; the cost is one extra call
       // on the fraction of turns that miss, and it buys back the structural
       // narration/speaker split that the prose fallback throws away.
       if (!isDirectorJsonReply(directorReply) && !directorResult.truncated) {
-        const repaired = await this.complete(options, buildDirectorRepairSystem(directorSystem, directorReply), [
-          { role: 'user', text: '把它转成 JSON。' },
+        repairSystem = buildDirectorRepairSystem(directorSystem, directorReply)
+        repairMessage = '把它转成 JSON。'
+        const repaired = await this.complete(options, repairSystem, [
+          { role: 'user', text: repairMessage },
         ], config.directorModel, replyBudgetChars(config, 'director'), config.reasoningReserveTokens)
         addUsage(beatUsage, repaired.usage)
         if (isDirectorJsonReply(repaired.text)) directorReply = repaired.text
@@ -1156,6 +1189,9 @@ export class TavernWorkspaceService extends Service {
       const turnRecord: BeatTurn = {
         directorSystem,
         directorReply,
+        ...(directorRawReply === directorReply ? {} : { directorRawReply }),
+        ...(repairSystem === undefined ? {} : { repairSystem }),
+        ...(repairMessage === undefined ? {} : { repairMessage }),
         decision,
         directorModel: {
           provider: config.directorModel?.provider ?? options.provider,
@@ -1251,7 +1287,7 @@ export class TavernWorkspaceService extends Service {
     // The turn number is read before the record is written: the loop has
     // already opened and closed this turn by the time the stream settles.
     const beatTurn = story === undefined ? undefined : this.lastTurnOf(story)
-    await this.writeBeat(cwd, {
+    const beatRecord: BeatRecord = {
       at: new Date().toISOString(),
       playerInput,
       directorSystem: turns[0]?.directorSystem ?? '',
@@ -1262,7 +1298,15 @@ export class TavernWorkspaceService extends Service {
       stageCountBefore,
       worldBefore: world,
       ...(replay === undefined ? {} : { regeneratedFrom: replay.beat.record.at }),
-    }, story)
+    }
+    await this.writeBeat(cwd, beatRecord, story)
+    // Trajectory reads the session log, not the beat file. Logging the same
+    // calls keeps the two views of "what was sent" from drifting apart.
+    this.appendBeatLog(story, beatLogFromRecord(
+      beatRecord,
+      playerInput,
+      this.beatModels(config, options, turns),
+    ))
     if (replay !== undefined && story !== undefined && beatTurn !== undefined) {
       // Recorded after the beat is durable: a superseded turn must point at a
       // replacement that actually exists, or the transcript labels a gap.
@@ -1988,7 +2032,8 @@ export class TavernWorkspaceService extends Service {
    * @param cwd - tavern workspace directory.
    * @param story - owning session id.
    * @param cards - cards whose static opening is the fallback.
-   * @returns display segments and the stage lines that record them.
+   * @returns display segments, the stage lines that record them, and the
+   *   generation call when a script was used.
    */
   private async openingBeatSegments(
     cwd: string,
@@ -1997,6 +2042,7 @@ export class TavernWorkspaceService extends Service {
   ): Promise<{
     segments: BeatSegment[]
     staged: Omit<StageEntry, 'seq' | 'at'>[]
+    script?: OpeningScript
   }> {
     const script = story === undefined ? undefined : await this.ensureOpeningScriptForDirectory(cwd, story)
     const segments: BeatSegment[] = []
@@ -2017,7 +2063,7 @@ export class TavernWorkspaceService extends Service {
           scope: 'observable',
         })
       }
-      return { segments, staged }
+      return { segments, staged, script }
     }
     const staticOpening = selectOpening(cards)
     if (staticOpening?.narration !== undefined) {
@@ -2110,6 +2156,63 @@ export class TavernWorkspaceService extends Service {
   }
 
   /**
+   * Append one beat's prompts to the session log.
+   *
+   * The orchestrator builds its own requests, so the loop never records them as
+   * `system/message`; without this record the prompts that actually decided the
+   * reply exist only in the beat file, and Trajectory can show nothing but the
+   * unchanging workspace prompt. The record is an ignorable plugin record, so it
+   * never enters derived model history, and a failure here must not fail a beat
+   * that has already committed its story state.
+   * @param sessionId - chat identity.
+   * @param log - assembled record.
+   */
+  private appendBeatLog(sessionId: string | undefined, log: BeatLogInput | undefined): void {
+    if (sessionId === undefined || log === undefined) return
+    const sessions = (this.ctx as unknown as { get(name: string): unknown }).get('sessions') as
+      | { get?: (id: string) => unknown | undefined }
+      | undefined
+    const session = sessions?.get?.(sessionId) as { append: unknown } | undefined
+    if (session === undefined) return
+    try {
+      appendPluginRecord(session as never, BEAT_RECORD_TYPE, buildBeatLog(log))
+    } catch (error) {
+      this.ctx.logger.warn(`[dshtavern] beat prompts not logged: ${String(error)}`)
+    }
+  }
+
+  /**
+   * Read the model labels one beat's calls used, for the log record.
+   * @param config - workspace orchestration settings.
+   * @param options - the intercepted loop request, the fallback route.
+   * @param turns - the beat's recorded calls.
+   * @returns director and per-character labels.
+   */
+  private beatModels(
+    config: TavernAgentConfig,
+    options: GenerateOptions,
+    turns: readonly BeatTurn[],
+  ): BeatLogModels {
+    const label = (choice: AgentModelChoice | undefined): string => choice === undefined
+      ? `${options.provider}/${options.model}`
+      : `${choice.provider}/${choice.model}`
+    const characters = new Map<string, string>()
+    for (const turn of turns) {
+      const speaker = turn.effectiveSpeaker
+      if (speaker === undefined) continue
+      characters.set(speaker.id, turn.characterModel === undefined
+        ? label(config.characterModel)
+        : `${turn.characterModel.provider}/${turn.characterModel.model}`)
+    }
+    return {
+      director: turns[0]?.directorModel === undefined
+        ? label(config.directorModel)
+        : `${turns[0].directorModel.provider}/${turns[0].directorModel.model}`,
+      characters,
+    }
+  }
+
+  /**
    * Generate and store one story's opening script.
    * @param workspacePath - tavern workspace root.
    * @param directory - story directory owning the script file.
@@ -2132,6 +2235,7 @@ export class TavernWorkspaceService extends Service {
     const system = buildOpeningSystem({ cards, worldbook: book.entries })
     const selection = this.defaultSelection()
     if (selection === undefined) return { segments: [] }
+    const openingMessage = '写开场。'
 
     let reply = ''
     try {
@@ -2140,7 +2244,7 @@ export class TavernWorkspaceService extends Service {
         model: selection.model,
         system,
         messages: [createUserMessage({
-          content: [{ type: 'text', text: '写开场。' }],
+          content: [{ type: 'text', text: openingMessage }],
           source: { kind: 'user' },
         })],
       })
@@ -2161,8 +2265,15 @@ export class TavernWorkspaceService extends Service {
       return { segments: [] }
     }
     // Remember which route wrote it: the transcript turn stamps that source, and
-    // a later regeneration must not claim a different provider.
-    const script: OpeningScript = { ...parsed, generatedBy: selection }
+    // a later regeneration must not claim a different provider. The exact
+    // prompt is kept too — the opening turn runs later and must log what this
+    // call sent, not a prompt rebuilt from whatever the cards say by then.
+    const script: OpeningScript = {
+      ...parsed,
+      generatedBy: selection,
+      system,
+      message: openingMessage,
+    }
     try {
       await writeOpeningScript(directory, script)
     } catch (error) {

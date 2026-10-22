@@ -42,6 +42,16 @@ export interface OpeningScript {
   readonly appendedAt?: string
   /** Provider/model the script was generated with, stamped on its transcript turn. */
   readonly generatedBy?: { readonly provider: string; readonly model: string }
+  /**
+   * Exact system prompt the generation call sent.
+   *
+   * Kept beside the script because the opening turn runs later than the
+   * generation and must log what was actually sent, not a prompt rebuilt from
+   * whatever the cards say by then.
+   */
+  readonly system?: string
+  /** Exact user message the generation call sent. */
+  readonly message?: string
 }
 
 /** Schema version of the stored script. */
@@ -222,6 +232,8 @@ export async function readOpeningScript(directory: string): Promise<OpeningScrip
     ...(typeof record.focusCardId === 'string' ? { focusCardId: record.focusCardId } : {}),
     ...(typeof record.generatedAt === 'string' ? { generatedAt: record.generatedAt } : {}),
     ...(typeof record.appendedAt === 'string' ? { appendedAt: record.appendedAt } : {}),
+    ...(typeof record.system === 'string' ? { system: record.system } : {}),
+    ...(typeof record.message === 'string' ? { message: record.message } : {}),
   }
 }
 
@@ -236,6 +248,9 @@ export async function writeOpeningScript(directory: string, script: OpeningScrip
     segments: script.segments,
     ...(script.focusCardId === undefined ? {} : { focusCardId: script.focusCardId }),
     ...(script.appendedAt === undefined ? {} : { appendedAt: script.appendedAt }),
+    ...(script.generatedBy === undefined ? {} : { generatedBy: script.generatedBy }),
+    ...(script.system === undefined ? {} : { system: script.system }),
+    ...(script.message === undefined ? {} : { message: script.message }),
     generatedAt: script.generatedAt ?? new Date().toISOString(),
   }
   await mkdir(directory, { recursive: true })

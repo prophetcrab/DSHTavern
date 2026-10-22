@@ -22,6 +22,7 @@ import { CLASS, PANEL_CSS } from './styles.js'
 import { installTavernWorkspaceMarks } from './marks.js'
 import { TavernGreetingDock } from './greeting.js'
 import { TavernTurnActions } from './regenerate.js'
+import { installTavernBeatRecords } from './beat-record.js'
 import { TavernToolboxDetector, TavernToolboxOverlay } from './toolbox.js'
 
 /** The id shared by the sidebar entry and the main panel it opens. */
@@ -885,4 +886,8 @@ export function apply(ctx: Context): void {
   // Mark tavern workspaces in the sidebar list. The sidebar exposes no slot for
   // a workspace row, so this observes the rendered rows instead.
   ctx.effect(() => installTavernWorkspaceMarks(), 'dshtavern: sidebar workspace marks')
+  // Contribute one Trajectory row per beat. The orchestrator builds its own
+  // model requests, so without this the prompts that actually decided each
+  // reply would never appear in the log the trajectory view reads.
+  installTavernBeatRecords(ctx)
 }

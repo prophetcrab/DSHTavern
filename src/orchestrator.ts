@@ -50,7 +50,14 @@ export type SpeakerSource = 'director' | 'player-mention' | 'fallback-first'
 /** One director/character exchange inside a beat, kept for inspection and replay. */
 export interface BeatTurn {
   directorSystem: string
+  /** Final director answer, after any repair call. */
   directorReply: string
+  /** What the director answered before the format repair replaced it. */
+  directorRawReply?: string
+  /** Repair call's system prompt, when the director ignored the output contract. */
+  repairSystem?: string
+  /** Repair call's user message. */
+  repairMessage?: string
   decision: DirectorDecision
   /** Route and model the director call used. */
   directorModel?: { readonly provider: string; readonly model: string }

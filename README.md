@@ -46,6 +46,7 @@
     tavern.json              # 标记：mode / title / tavernId
     worldbook.json           # 工作区级世界书
     state/agent.json         # Agent 编排设置（缺失即用默认值）
+    state/last-request.json  # 被拦截的 loop 请求（只有工作区提示词）
     stories/<session>/
       stage.jsonl            # 舞台：追加写的旁白与台词
       world.json             # 导演私有：场景 / 事实 / 未揭示剧情
@@ -66,6 +67,8 @@
 
 创建时必须选择模式（角色扮演 / 小说），创建后不可更改。面板自动刷新（挂载时、每 4 秒、窗口重新获得焦点时、每次操作后）。
 
+每幕的提示词可在会话的 **轨迹** 页查看：每次导演调用（含续幕与格式修复）和每位角色的 system / user / 回复都按顺序记进会话日志，折叠行显示「第 N 轮 · 导演 + 角色名」。它们不是 DSH 的 `system/message`（编排器绕过 loop 自己发请求），只是插件的 `ignorable` 记录，不进模型历史。
+
 最新一条回复下方有 **重新生成**：回退到这一幕开始前的舞台与世界状态，让导演和角色重演一次。新回复作为下一轮追加，旧回复保留并标记「这一条已被第 N 轮重新生成取代」——DSH 的转写只追加，无法原地改写，所以旧回复不会消失。只有最新的回复能重生成。
 
 ## 开发
@@ -73,7 +76,7 @@
 ```sh
 pnpm install
 pnpm build      # 宿主 tsc + 浏览器半 tsdown
-pnpm test       # 300 项，全离线
+pnpm test       # 316 项，全离线
 pnpm typecheck
 ```
 
