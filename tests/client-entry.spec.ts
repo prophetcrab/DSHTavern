@@ -105,6 +105,7 @@ describe('browser entry', () => {
       'conversation.input.left',
       'shell.overlay',
       'conversation.input.dock',
+      'conversation.chat.turnTail',
     ])
     expect(entries[0]?.options.key).toBe(PANEL_ID)
     expect(entries[1]?.options.id).toBe(PANEL_ID)

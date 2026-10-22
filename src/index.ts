@@ -24,7 +24,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { createMessage, createUserMessage, isAgentLoopRequest, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, isAgentLoopRequest, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
@@ -66,8 +66,21 @@ import {
 import type { OpeningScript } from './opening.js'
 import { buildPreview } from './preview.js'
 import type { PromptPreview } from './preview.js'
-import type { BeatRecord, BeatSegment, CastMember, DirectorDecision } from './orchestrator.js'
-import { appendStage, readStage, readWorld, storyDirectory, writeWorld } from './stage.js'
+import type { BeatRecord, BeatSegment, BeatTurn, CastMember, DirectorDecision } from './orchestrator.js'
+import { appendStage, readStage, readWorld, storyDirectory, writeStage, writeWorld } from './stage.js'
+import {
+  OPENING_PROMPT,
+  OPENING_SOURCE_KIND,
+  REGENERATE_PROMPT,
+  REGENERATE_SOURCE_KIND,
+  REGENERATE_UNAVAILABLE,
+  REGENERATION_QUEUE_WINDOW_MS,
+  appendRegeneration,
+  listBeats,
+  readRegenerations,
+  truncationPoint,
+} from './regenerate.js'
+import type { RegenerationRecord, StoredBeat } from './regenerate.js'
 import {
   AgentConfigInvalidError,
   defaultAgentConfig,
@@ -87,7 +100,7 @@ import {
   writeWorldbook,
 } from './worldbook.js'
 import type { WorldbookEntry, WorldbookFile } from './worldbook.js'
-import type { StageEntry } from './stage.js'
+import type { StageEntry, WorldState } from './stage.js'
 import {
   PROMPT_LAYOUT_SCHEMA,
   PromptLayoutInvalidError,
@@ -113,20 +126,6 @@ export const EMPTY_BEAT_NOTICE = '这一幕模型没有返回内容。可以再�
 
 /** Appended when any call in a beat hit its reply budget. */
 export const TRUNCATED_NOTICE = '（本幕达到设定的回复长度上限，内容被截断。可在 Agent 编排里调大回复长度。）'
-
-/**
- * Source stamped on the opening turn's assistant message.
- *
- * The opening script is model-authored, so the message keeps the model kind;
- * the provider/model recorded are the ones the opening was actually generated
- * with, not the session's routed call.
- * @param provider - provider route used for generation.
- * @param model - model used for generation.
- * @returns the message source.
- */
-function openingMessageSource(provider: string, model: string): { kind: 'model'; provider: string; model: string } {
-  return { kind: 'model', provider, model }
-}
 
 /** Marker file name inside {@link TAVERN_DIRECTORY}. */
 export const MARKER_FILE = 'tavern.json'
@@ -620,6 +619,12 @@ export class TavernWorkspaceService extends Service {
    * model call, and must still get the script staged rather than the fallback.
    */
   private readonly openingGenerations = new Map<string, Promise<OpeningScript>>()
+  /**
+   * Sessions with a regeneration queued but not yet run, and when it was
+   * queued. A second request inside the window is a double click, not two
+   * regenerations; the window also expires an entry whose turn never ran.
+   */
+  private readonly pendingRegenerations = new Map<string, number>()
 
   /**
    * @param ctx - Cordis context carrying `workspaceRegistry`.
@@ -994,11 +999,30 @@ export class TavernWorkspaceService extends Service {
       yield* textReply(options, message)
       return
     }
-    const world = await readWorld(cwd, story)
-    const stage = await readStage(cwd, story)
     const cast = cards.map(card => ({ id: card.id, name: card.name, brief: cardBrief(card) }))
     const config = await readAgentConfig(cwd)
-    const playerInput = lastUserText(options, config.playerInputMax)
+    // A turn can only start from a message, so both the opening and the
+    // regenerate action announce themselves as a real inbox message with their
+    // own source kind. Neither is player text.
+    const openingRequest = isOpeningRequest(options)
+    const replaying = !openingRequest && isRegenerationRequest(options)
+    const replay = replaying ? await this.rewindForRegeneration(cwd, story) : undefined
+    if (replaying && story !== undefined) {
+      // The queued request has reached its turn; a later request may start now.
+      this.pendingRegenerations.delete(story)
+    }
+    if (replaying && replay === undefined) {
+      yield* textReply(options, REGENERATE_UNAVAILABLE)
+      return
+    }
+    const world = replay?.world ?? await readWorld(cwd, story)
+    const stage = replay?.stage ?? await readStage(cwd, story)
+    // The stage length before this beat stages anything. Regeneration rewinds
+    // exactly here, so a discarded draft never reaches the next prompt.
+    const stageCountBefore = stage.length
+    const playerInput = replay === undefined
+      ? lastUserText(options, config.playerInputMax)
+      : replay.beat.record.playerInput.slice(0, config.playerInputMax)
     const layout = await readPromptLayout(cwd)
     const directorLayout = await readPromptLayout(cwd, 'director')
     const workspaceBook = await readWorldbook(cwd)
@@ -1006,13 +1030,31 @@ export class TavernWorkspaceService extends Service {
     // a fallback that keeps the scene moving, not the final word on who answers.
     const addressed = config.honorPlayerMention ? mentionedSpeaker(playerInput, cast) : undefined
 
-    // The first beat of an empty story stages the generated opening script —
-    // narration and character lines — before the director runs, so the scene is
-    // already established instead of blank. A story whose script could not be
-    // generated falls back to the cards' static scenario and greeting.
-    // Read the stored script, or join the generation the pre-chat card already
-    // started. Waiting here is what keeps the static fallback from winning the
-    // race when the player types while the card is still generating.
+    // An opening turn shows the generated script and stops; the director has
+    // nothing to decide until the player acts. It is a turn of its own so the
+    // scene is already in the transcript when the player's first message
+    // arrives, instead of being prepended below that line.
+    if (openingRequest) {
+      // A story that already staged anything has had its opening; a late
+      // trigger (a second card mount, or a queued request that raced the first
+      // player prompt) must not append a second beginning.
+      if (stage.length > 0) {
+        yield* emptyReply()
+        return
+      }
+      const opening = await this.openingBeatSegments(cwd, story, cards)
+      if (opening.staged.length > 0) await appendStage(cwd, opening.staged, story)
+      const text = opening.segments.length > 0
+        ? renderBeatMarkdown(opening.segments)
+        : EMPTY_BEAT_NOTICE
+      yield* textReply(options, text)
+      return
+    }
+
+    // Fallback for a story whose opening turn never ran (the player typed
+    // before the script was ready, or the story predates the opening turn):
+    // the reply still starts with the opening, because dropping it entirely
+    // would lose the scene the cards describe.
     const script = stage.length === 0 && story !== undefined
       ? await this.ensureOpeningScriptForDirectory(cwd, story)
       : undefined
@@ -1024,22 +1066,12 @@ export class TavernWorkspaceService extends Service {
     const spoken: CastMember[] = []
     const turns: BeatTurn[] = []
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
-    // The opening is both staged and segmented. The pre-chat card disappears the
-    // moment the player speaks, so leaving it out of this reply would drop it
-    // from the transcript entirely — the player would watch the opening vanish.
-    // Segments render it once, as the head of the first reply, which is also the
-    // last time it is shown.
     const openingLines: Omit<StageEntry, 'seq' | 'at'>[] = []
-    // The opening was appended as the story's turn 0, so the client already
-    // renders it above this reply. When that write succeeded the reply must not
-    // repeat it; when it did not (an older story, or a session that could not
-    // accept the turn), the opening still needs to appear somewhere.
-    const openingAlreadyShown = script?.appendedAt !== undefined
     if (script !== undefined) {
       for (const segment of script.segments) {
         if (segment.kind === 'narration') {
           openingLines.push({ kind: 'narration', text: segment.text, scope: 'observable' })
-          if (!openingAlreadyShown) segments.push({ kind: 'narration', text: segment.text })
+          segments.push({ kind: 'narration', text: segment.text })
           continue
         }
         openingLines.push({
@@ -1049,9 +1081,7 @@ export class TavernWorkspaceService extends Service {
           text: segment.text,
           scope: 'observable',
         })
-        if (!openingAlreadyShown) {
-          segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
-        }
+        segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
       }
     } else if (staticOpening !== undefined) {
       if (staticOpening.narration !== undefined) {
@@ -1200,14 +1230,27 @@ export class TavernWorkspaceService extends Service {
       spoken.push(speaker)
     }
 
-    if (staged.length > 0) await appendStage(cwd, staged, story)
-    if (inner.length > 0) {
-      await writeWorld(cwd, {
-        scene: segments.find(segment => segment.kind === 'narration')?.text ?? world.scene,
-        facts: world.facts,
-        hidden: [...world.hidden, inner],
-      }, story)
+    // A replay commits the trimmed stage and the restored world together, so a
+    // discarded draft never survives into the next prompt. A normal beat only
+    // appends, which keeps its files untouched when a model call fails.
+    const nextWorld = {
+      scene: segments.find(segment => segment.kind === 'narration')?.text ?? world.scene,
+      facts: world.facts,
+      hidden: inner.length > 0 ? [...world.hidden, inner] : world.hidden,
     }
+    if (replay !== undefined) {
+      // The loop pushed every fresh line into `stage` to keep the next prompt
+      // current, so `stage` is already the trimmed prefix followed by the new
+      // lines in order. Writing `staged` again would duplicate them.
+      await writeStage(cwd, stage, story)
+      await writeWorld(cwd, nextWorld, story)
+    } else {
+      if (staged.length > 0) await appendStage(cwd, staged, story)
+      if (inner.length > 0) await writeWorld(cwd, nextWorld, story)
+    }
+    // The turn number is read before the record is written: the loop has
+    // already opened and closed this turn by the time the stream settles.
+    const beatTurn = story === undefined ? undefined : this.lastTurnOf(story)
     await this.writeBeat(cwd, {
       at: new Date().toISOString(),
       playerInput,
@@ -1215,7 +1258,22 @@ export class TavernWorkspaceService extends Service {
       directorReply: turns[0]?.directorReply ?? '',
       decision: turns[0]?.decision ?? { narration: '', inner: '' },
       turns,
+      ...(beatTurn === undefined ? {} : { turn: beatTurn }),
+      stageCountBefore,
+      worldBefore: world,
+      ...(replay === undefined ? {} : { regeneratedFrom: replay.beat.record.at }),
     }, story)
+    if (replay !== undefined && story !== undefined && beatTurn !== undefined) {
+      // Recorded after the beat is durable: a superseded turn must point at a
+      // replacement that actually exists, or the transcript labels a gap.
+      await appendRegeneration(storyDirectory(cwd, story), {
+        turn: replay.beat.record.turn ?? Math.max(0, beatTurn - 1),
+        replacement: beatTurn,
+        at: new Date().toISOString(),
+      }).catch((error: unknown) => {
+        this.ctx.logger.warn(`[dshtavern] regeneration record not stored: ${String(error)}`)
+      })
+    }
 
     // An empty beat means every model call returned nothing (or the director
     // produced no narration and named no speaker). Reporting that beats a blank
@@ -1510,6 +1568,16 @@ export class TavernWorkspaceService extends Service {
       }), 'dshtavern: /tavern/greeting')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
+        path: '/tavern/opening',
+        handler: (req, res) => this.handleOpening(req, res),
+      }), 'dshtavern: /tavern/opening')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: '/tavern/regenerate',
+        handler: (req, res) => this.handleRegenerate(req, res),
+      }), 'dshtavern: /tavern/regenerate')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
         path: '/tavern/agent',
         handler: (req, res) => this.handleAgentConfig(req, res),
       }), 'dshtavern: /tavern/agent')
@@ -1736,45 +1804,267 @@ export class TavernWorkspaceService extends Service {
    *
    * The script is written once per chat and stored under that chat's story
    * directory, so reopening never spends another call and never changes what the
-   * player already read.
+   * player already read. Reading it does not touch the transcript: the opening
+   * becomes a real turn only when {@link requestOpening} queues one.
    * @param workspaceId - registered tavern workspace id.
    * @param sessionId - chat identity owning the script.
    * @returns the stored or freshly generated script; empty when it cannot be written.
    */
   async ensureOpeningScript(workspaceId: string, sessionId: string): Promise<OpeningScript> {
     const workspace = await this.requireTavernWorkspace(workspaceId)
-    const script = await this.ensureOpeningScriptForDirectory(workspace.path, sessionId)
-    return this.stageOpeningTurn(workspace.path, sessionId, script)
+    return this.ensureOpeningScriptForDirectory(workspace.path, sessionId)
   }
 
   /**
-   * Write a script into the session transcript as the story's opening turn.
+   * Queue the opening as a turn of its own.
    *
-   * Runs once per story: the stored script records `appendedAt` after a
-   * successful write, so a reload never duplicates the turn.
-   * @param workspacePath - tavern workspace root.
+   * The opening must precede the player's first message, and the transcript
+   * order is turn order, so it cannot be prepended to the first reply. A turn
+   * also cannot be written from outside the loop: the loop owns turn numbering,
+   * and a turn it did not open makes the session unreadable on reload. Queuing
+   * an inbox message with the opening source is therefore the only sound way to
+   * produce it — the loop opens the turn, and the orchestrator fills it with
+   * the script instead of calling the director.
+   *
+   * A story that already has turns keeps its existing opening; a second call is
+   * a no-op so the greeting card can retry freely.
+   * @param workspaceId - registered tavern workspace id.
    * @param sessionId - chat identity.
-   * @param script - generated script.
-   * @returns the script, with `appendedAt` set when the transcript accepted it.
+   * @returns whether the opening turn was queued.
    */
-  private stageOpeningTurn(workspacePath: string, sessionId: string, script: OpeningScript): OpeningScript {
-    if (script.segments.length === 0 || script.appendedAt !== undefined) return script
-    const text = script.segments
-      .map(segment => segment.kind === 'narration'
-        ? segment.text
-        : `**${segment.speakerName ?? '角色'}**\n\n${segment.text}`)
-      .join('\n\n')
-    const generatedBy = script.generatedBy ?? this.defaultSelection()
-    if (generatedBy === undefined) return script
-    if (!this.appendOpeningTurn(sessionId, text, generatedBy)) return script
-    const appended: OpeningScript = { ...script, appendedAt: new Date().toISOString() }
-    // Best-effort: the transcript already has the opening, so a failed cache
-    // write only risks a second generation, not a wrong transcript.
-    void writeOpeningScript(storyDirectory(workspacePath, sessionId), appended)
-      .catch((error: unknown) => {
-        this.ctx.logger.warn(`[dshtavern] opening script not stored: ${String(error)}`)
-      })
-    return appended
+  async requestOpening(workspaceId: string, sessionId: string): Promise<{ queued: boolean }> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    // The stage, not the turn projection, decides whether the opening already
+    // ran: the projection is absent on a cold session, while the stage is always
+    // on disk from the moment the opening turn staged its lines.
+    const stage = await readStage(workspace.path, sessionId)
+    if (stage.length > 0 || this.lastTurnOf(sessionId) > 0) return { queued: false }
+    const script = await this.ensureOpeningScriptForDirectory(workspace.path, sessionId)
+    if (script.segments.length === 0) return { queued: false }
+    return { queued: await this.queueTrigger(sessionId, OPENING_SOURCE_KIND, OPENING_PROMPT, '生成开场') }
+  }
+
+  /**
+   * Describe one story's regeneration state.
+   *
+   * `replayableTurn` is the only turn the action can replace: the rewind target
+   * is always the newest beat. The client uses it to hide the action on turns
+   * that cannot be regenerated (an opening-only story, or any older reply)
+   * instead of offering a button that would immediately refuse.
+   * @param workspaceId - registered tavern workspace id.
+   * @param sessionId - chat identity.
+   * @returns superseded turns and the newest replayable turn, when known.
+   */
+  async regenerationState(
+    workspaceId: string,
+    sessionId: string,
+  ): Promise<{ regenerations: RegenerationRecord[]; replayableTurn?: number }> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const [regenerations, beats] = await Promise.all([
+      readRegenerations(storyDirectory(workspace.path, sessionId)),
+      listBeats(storyDirectory(workspace.path, sessionId)),
+    ])
+    const newest = beats[0]
+    if (newest === undefined) return { regenerations }
+    // A cold session cannot answer through its projection; the beat's own turn
+    // number is then the only source, and its absence means "unknown" rather
+    // than "turn 0".
+    const turn = newest.record.turn ?? this.lastTurnOf(sessionId)
+    return { regenerations, ...(turn > 0 ? { replayableTurn: turn } : {}) }
+  }
+
+  /**
+   * Start one regeneration turn for a story.
+   *
+   * Only the newest beat can be replayed: the mechanism rolls the story state
+   * back to that beat's start, so an older turn would have to discard every
+   * turn after it. The newest beat's turn number is the check that the caller
+   * and the story agree on which reply is being replaced.
+   * @param workspaceId - registered tavern workspace id.
+   * @param sessionId - chat identity.
+   * @param turn - turn the caller is regenerating.
+   * @returns the turn that will receive the replacement reply.
+   * @throws TavernInputError when the request is stale, the story has no beat,
+   *   or the agent is busy.
+   */
+  async requestRegeneration(workspaceId: string, sessionId: string, turn: number): Promise<{ turn: number }> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const beats = await listBeats(storyDirectory(workspace.path, sessionId))
+    const newest = beats[0]
+    if (newest === undefined) {
+      this.ctx.logger.warn(`[dshtavern] no replayable beat in ${storyDirectory(workspace.path, sessionId)}`)
+      throw new TavernInputError(REGENERATE_UNAVAILABLE)
+    }
+    // Beats written before the record carried a turn number fall back to the
+    // session's newest turn. That projection is only available while the Agent
+    // is attached, so a cold session has no number to compare against; the
+    // rewind itself still targets the newest beat, which is the real invariant.
+    const newestTurn = newest.record.turn ?? this.lastTurnOf(sessionId)
+    if (newestTurn > 0 && newestTurn !== turn) {
+      throw new TavernInputError(`只能重新生成最新的回复（第 ${newestTurn} 轮）。`)
+    }
+    const controller = (this.ctx as unknown as { get(name: string): unknown }).get('sessionController') as
+      | {
+        resolveAgent?: (id: string) => Promise<
+          { agent?: { status?: string; followup?: (message: unknown) => void } } | { error?: unknown }
+        >
+      }
+      | undefined
+    if (controller?.resolveAgent === undefined) {
+      throw new TavernInputError('当前部署没有会话控制器，无法重新生成。')
+    }
+    const resolved = await controller.resolveAgent(sessionId)
+    if (resolved === undefined || !('agent' in resolved) || resolved.agent === undefined) {
+      throw new TavernInputError('这个会话无法恢复，无法重新生成。')
+    }
+    const agent = resolved.agent
+    if (agent.followup === undefined) throw new TavernInputError('这个会话没有可用的 Agent，无法重新生成。')
+    if (agent.status !== 'idle') throw new TavernInputError('上一轮还在进行中，等它结束后再重新生成。')
+    const queuedAt = this.pendingRegenerations.get(sessionId)
+    if (queuedAt !== undefined && Date.now() - queuedAt < REGENERATION_QUEUE_WINDOW_MS) {
+      throw new TavernInputError('已经有一次重新生成在排队了。')
+    }
+    this.pendingRegenerations.set(sessionId, Date.now())
+    try {
+      agent.followup(createUserMessage({
+        content: [{ type: 'text', text: REGENERATE_PROMPT }],
+        source: { kind: REGENERATE_SOURCE_KIND, form: 'notice', summary: '重新生成上一幕' },
+      }))
+    } catch (error) {
+      this.pendingRegenerations.delete(sessionId)
+      throw error
+    }
+    return { turn: turn + 1 }
+  }
+
+  /**
+   * Queue one non-player trigger turn.
+   *
+   * A turn cannot be written from outside the loop: the loop owns turn
+   * numbering, and a turn it did not open makes the session unreadable on
+   * reload. The only sound way to run work as a turn is an inbox message the
+   * loop claims, so every trigger uses this path.
+   * @param sessionId - chat identity.
+   * @param kind - source kind the orchestrator dispatches on.
+   * @param text - model-facing trigger body; never player text.
+   * @param summary - one-line account shown on the context row.
+   * @returns whether the trigger was accepted.
+   */
+  private async queueTrigger(
+    sessionId: string,
+    kind: typeof OPENING_SOURCE_KIND | typeof REGENERATE_SOURCE_KIND,
+    text: string,
+    summary: string,
+  ): Promise<boolean> {
+    const controller = (this.ctx as unknown as { get(name: string): unknown }).get('sessionController') as
+      | {
+        resolveAgent?: (id: string) => Promise<
+          { agent?: { status?: string; followup?: (message: unknown) => void } } | { error?: unknown }
+        >
+      }
+      | undefined
+    if (controller?.resolveAgent === undefined) {
+      throw new TavernInputError('当前部署没有会话控制器，无法开始这一轮。')
+    }
+    const resolved = await controller.resolveAgent(sessionId)
+    if (resolved === undefined || !('agent' in resolved) || resolved.agent === undefined) {
+      throw new TavernInputError('这个会话无法恢复，无法开始这一轮。')
+    }
+    const agent = resolved.agent
+    if (agent.followup === undefined) throw new TavernInputError('这个会话没有可用的 Agent。')
+    if (agent.status !== 'idle') throw new TavernInputError('上一轮还在进行中，等它结束后再试。')
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind, form: 'notice', summary },
+    }))
+    return true
+  }
+
+  /**
+   * Read the opening as beat segments and stage lines.
+   *
+   * Shared by the opening turn and the legacy inline fallback so both render
+   * the script identically.
+   * @param cwd - tavern workspace directory.
+   * @param story - owning session id.
+   * @param cards - cards whose static opening is the fallback.
+   * @returns display segments and the stage lines that record them.
+   */
+  private async openingBeatSegments(
+    cwd: string,
+    story: string | undefined,
+    cards: readonly CharacterCard[],
+  ): Promise<{
+    segments: BeatSegment[]
+    staged: Omit<StageEntry, 'seq' | 'at'>[]
+  }> {
+    const script = story === undefined ? undefined : await this.ensureOpeningScriptForDirectory(cwd, story)
+    const segments: BeatSegment[] = []
+    const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
+    if (script !== undefined && script.segments.length > 0) {
+      for (const segment of script.segments) {
+        if (segment.kind === 'narration') {
+          segments.push({ kind: 'narration', text: segment.text })
+          staged.push({ kind: 'narration', text: segment.text, scope: 'observable' })
+          continue
+        }
+        segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
+        staged.push({
+          kind: 'speech',
+          speaker: segment.cardId ?? '',
+          speakerName: segment.speakerName ?? '',
+          text: segment.text,
+          scope: 'observable',
+        })
+      }
+      return { segments, staged }
+    }
+    const staticOpening = selectOpening(cards)
+    if (staticOpening?.narration !== undefined) {
+      segments.push({ kind: 'narration', text: staticOpening.narration.text })
+      staged.push(openingNarrationStageLine(staticOpening.narration))
+    }
+    if (staticOpening?.greeting !== undefined) {
+      segments.push({ kind: 'speech', name: staticOpening.greeting.name, text: staticOpening.greeting.text })
+      staged.push(greetingStageLine(staticOpening.greeting))
+    }
+    return { segments, staged }
+  }
+
+  /**
+   * Roll a story back to the state the newest beat started from.
+   *
+   * The transcript is append-only, so regeneration cannot delete the old
+   * reply. The story state is what matters: cutting the stage and restoring
+   * the director's world means the replay never reads the discarded draft, and
+   * the new reply is appended as the next turn while the old one is marked
+   * superseded through {@link appendRegeneration}.
+   *
+   * Nothing is written here. The caller commits the trimmed stage only after
+   * the replay settles, so a failed replay leaves the replaced beat intact
+   * instead of deleting it without a replacement.
+   * @param cwd - tavern workspace directory.
+   * @param story - owning session id, when the request has one.
+   * @returns the beat to replay and the state it started from, or `undefined`
+   *   when the story has no replayable beat.
+   */
+  private async rewindForRegeneration(
+    cwd: string,
+    story: string | undefined,
+  ): Promise<{ beat: StoredBeat; stage: StageEntry[]; world: WorldState } | undefined> {
+    const beats = await listBeats(storyDirectory(cwd, story))
+    const beat = beats[0]
+    if (beat === undefined) return undefined
+    const stage = await readStage(cwd, story)
+    // Beats written before the world snapshot existed cannot restore it; the
+    // replay then starts from the current world, which is the closest honest
+    // approximation available.
+    const world = beat.record.worldBefore ?? await readWorld(cwd, story)
+    return {
+      beat,
+      stage: stage.slice(0, truncationPoint(beat.record, stage.length)),
+      world,
+    }
   }
 
   /**
@@ -1793,62 +2083,6 @@ export class TavernWorkspaceService extends Service {
       | undefined
     const state = projections?.stateOf?.(session, 'turnBoundary')
     return typeof state?.lastTurn === 'number' ? state.lastTurn : 0
-  }
-
-  /**
-   * Append a generated opening to the session transcript as its own turn.
-   *
-   * The opening belongs before the player's first message, not after it: the
-   * player reads the scene, then acts. Rendering it inside the first reply put
-   * it below the player's line, which is backwards. Writing it as turn 0 means
-   * the client renders it as an ordinary assistant turn ahead of turn 1, and the
-   * model's derived history carries it too.
-   *
-   * Only safe while the session has no turns yet; a story that already started
-   * keeps the opening on the stage alone, and the caller renders it in the
-   * reply instead.
-   * @param sessionId - chat identity.
-   * @param segmentText - opening text as one assistant message body.
-   * @param generatedBy - provider/model the script was generated with.
-   * @returns whether the transcript accepted the opening.
-   */
-  private appendOpeningTurn(
-    sessionId: string,
-    segmentText: string,
-    generatedBy: { provider: string; model: string },
-  ): boolean {
-    const sessions = (this.ctx as unknown as { get(name: string): unknown }).get('sessions') as
-      | { get?: (id: string) => unknown | undefined }
-      | undefined
-    const session = sessions?.get?.(sessionId) as
-      | { append: (type: string, data: unknown, opts?: unknown) => { seq: number } }
-      | undefined
-    if (session === undefined) return false
-    // A started story already owns turn 1; appending turn 0 now would place the
-    // opening after the player's line. The loop's own projection is the
-    // authority on whether any turn exists yet.
-    if (this.lastTurnOf(sessionId) > 0) return false
-
-    try {
-      session.append('turn/start', { turn: 0 })
-      session.append('step/start', { turn: 0, step: 0 })
-      session.append('assistant/message', {
-        turn: 0,
-        step: 0,
-        message: createMessage({
-          role: 'assistant',
-          content: [{ type: 'text', text: segmentText }],
-          source: openingMessageSource(generatedBy.provider, generatedBy.model),
-        }),
-        stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [], texts: [segmentText] }],
-      }, { surfaceOp: 'append' })
-      session.append('step/end', { turn: 0, step: 0 })
-      session.append('turn/end', { turn: 0, reason: { kind: 'completed' } })
-      return true
-    } catch (error) {
-      this.ctx.logger.warn(`[dshtavern] opening turn not appended: ${String(error)}`)
-      return false
-    }
   }
 
   /**
@@ -2029,6 +2263,71 @@ export class TavernWorkspaceService extends Service {
       }
       const script = await this.ensureOpeningScript(workspaceId, sessionId)
       sendJson(res, 200, { ok: true, script })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
+  /**
+   * Queue the story's opening as its own turn.
+   *
+   * The pre-chat card calls this once the script exists. It is separate from
+   * `GET /tavern/greeting` because reading the script is idempotent while
+   * starting a turn is not.
+   */
+  private async handleOpening(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    if (req.method !== 'POST') {
+      methodNotAllowed(res, 'POST')
+      return
+    }
+    try {
+      const body = await readJsonObject(req)
+      const workspaceId = optionalString(body, 'workspaceId')
+      const sessionId = optionalString(body, 'sessionId')
+      if (workspaceId === undefined) throw new TavernInputError('缺少 workspaceId')
+      if (sessionId === undefined) throw new TavernInputError('缺少 sessionId')
+      sendJson(res, 200, { ok: true, ...await this.requestOpening(workspaceId, sessionId) })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
+  /**
+   * Read one story's superseded turns, or start a regeneration.
+   *
+   * `GET` reports which turns were replaced so the transcript can label them.
+   * `POST` validates that the named turn is the newest beat and then queues the
+   * regeneration trigger, which wakes the agent and runs one replaying beat.
+   */
+  private async handleRegenerate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    try {
+      const method = req.method ?? 'GET'
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (method === 'GET') {
+        const workspaceId = workspaceIdFromUrl(req)
+        const sessionId = url.searchParams.get('sessionId')
+        if (sessionId === null || sessionId.length === 0) throw new TavernInputError('缺少 sessionId')
+        sendJson(res, 200, { ok: true, ...await this.regenerationState(workspaceId, sessionId) })
+        return
+      }
+      if (method !== 'POST') {
+        res.setHeader('allow', 'GET, POST')
+        sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
+        return
+      }
+      const body = await readJsonObject(req)
+      const workspaceId = optionalString(body, 'workspaceId')
+      const sessionId = optionalString(body, 'sessionId')
+      const turn = body.turn
+      if (workspaceId === undefined) throw new TavernInputError('缺少 workspaceId')
+      if (sessionId === undefined) throw new TavernInputError('缺少 sessionId')
+      if (typeof turn !== 'number' || !Number.isSafeInteger(turn) || turn < 0) {
+        throw new TavernInputError('缺少要重新生成的轮次')
+      }
+      const started = await this.requestRegeneration(workspaceId, sessionId, turn)
+      sendJson(res, 200, { ok: true, turn: started.turn })
     } catch (error) {
       this.fail(res, error)
     }
@@ -2252,25 +2551,8 @@ function isMissing(error: unknown): boolean {
  * A beat is a player turn; it may hold several of these when the director keeps
  * the scene going after a character speaks.
  */
-interface BeatTurn {
-  directorSystem: string
-  directorReply: string
-  decision: DirectorDecision
-  /** Route and model the director call used. */
-  directorModel?: { readonly provider: string; readonly model: string }
-  /** Route and model the character call used. */
-  characterModel?: { readonly provider: string; readonly model: string }
-  /** How the speaking character was chosen, when one spoke. */
-  speakerSource?: SpeakerSource
-  /** Character the orchestrator actually used; differs from the director's pick when overridden. */
-  effectiveSpeaker?: { readonly id: string; readonly name: string }
-  characterSystem?: string
-  characterPromptMessages?: readonly { role: string; text: string }[]
-  speech?: string
-}
-
 /** Where a turn's speaking character came from. */
-type SpeakerSource = 'director' | 'player-mention' | 'fallback-first'
+type SpeakerSource = BeatTurn['speakerSource'] & string
 
 /**
  * Next stage sequence number.
@@ -2316,6 +2598,10 @@ export function lastUserText(options: GenerateOptions, max: number = PLAYER_INPU
     const message = options.messages[index]
     if (message === undefined || message.role !== 'user') continue
     if (isRuntimeContextMessage(message) || hasSystemReminder(message)) continue
+    const kind = messageSourceKind(message)
+    // Tavern triggers start a turn but are not something the player said; the
+    // opening and regenerate beats read their input from elsewhere.
+    if (kind !== undefined && (kind === REGENERATE_SOURCE_KIND || kind === OPENING_SOURCE_KIND)) continue
     const text = message.content
       .filter(part => part.type === 'text')
       .map(part => (part as { text: string }).text)
@@ -2324,6 +2610,56 @@ export function lastUserText(options: GenerateOptions, max: number = PLAYER_INPU
     if (text.length > 0) return text.slice(0, max)
   }
   return ''
+}
+
+/**
+ * Read one message's producer kind.
+ * @param message - request message of either form.
+ * @returns the source kind, or `undefined` for an unidentified one-shot input.
+ */
+function messageSourceKind(message: object): string | undefined {
+  const source = (message as { source?: unknown }).source
+  if (typeof source !== 'object' || source === null) return undefined
+  const kind = (source as { kind?: unknown }).kind
+  return typeof kind === 'string' ? kind : undefined
+}
+
+/**
+ * Whether this turn was started by the opening action.
+ * @param options - the intercepted loop request.
+ * @returns true when the beat must stage the opening script.
+ */
+export function isOpeningRequest(options: GenerateOptions): boolean {
+  return newestTriggerKind(options) === OPENING_SOURCE_KIND
+}
+
+/**
+ * Whether this turn was started by the regenerate action rather than a prompt.
+ *
+ * The trigger carries its own source kind, so the check reads the newest
+ * non-harness user message instead of matching text: the player could type the
+ * same words.
+ * @param options - the intercepted loop request.
+ * @returns true when the beat must replay the previous one.
+ */
+export function isRegenerationRequest(options: GenerateOptions): boolean {
+  return newestTriggerKind(options) === REGENERATE_SOURCE_KIND
+}
+
+/**
+ * Source kind of the newest user message the player did not author.
+ * @param options - the intercepted loop request.
+ * @returns the kind, or `undefined` for an ordinary prompt.
+ */
+function newestTriggerKind(options: GenerateOptions): string | undefined {
+  for (let index = options.messages.length - 1; index >= 0; index -= 1) {
+    const message = options.messages[index]
+    if (message === undefined || message.role !== 'user') continue
+    if (isRuntimeContextMessage(message) || hasSystemReminder(message)) continue
+    const kind = messageSourceKind(message)
+    return kind === 'user' ? undefined : kind
+  }
+  return undefined
 }
 
 /** @returns a stream that reports a finished, empty reply. */

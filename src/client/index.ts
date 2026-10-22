@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { CLASS, PANEL_CSS } from './styles.js'
 import { installTavernWorkspaceMarks } from './marks.js'
 import { TavernGreetingDock } from './greeting.js'
+import { TavernTurnActions } from './regenerate.js'
 import { TavernToolboxDetector, TavernToolboxOverlay } from './toolbox.js'
 
 /** The id shared by the sidebar entry and the main panel it opens. */
@@ -871,6 +872,16 @@ export function apply(ctx: Context): void {
     order: -10,
     label: '酒馆开场白',
   } as never, TavernGreetingDock as never))
+  // Regeneration belongs to a reply, not to the toolbox: the action sits under
+  // the newest completed turn and the superseded marker replaces it once a
+  // replacement lands.
+  const turnTail = 'conversation.chat.turnTail' as never
+  ctx.slots.inject(turnTail, () => ctx.slots.register({
+    name: turnTail,
+    id: 'tavern-regenerate',
+    order: 0,
+    label: '酒馆重新生成',
+  } as never, TavernTurnActions as never))
   // Mark tavern workspaces in the sidebar list. The sidebar exposes no slot for
   // a workspace row, so this observes the rendered rows instead.
   ctx.effect(() => installTavernWorkspaceMarks(), 'dshtavern: sidebar workspace marks')

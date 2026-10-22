@@ -154,14 +154,24 @@
 - 开场脚本：空会话在输入框上方显示一张卡片（`conversation.input.dock`，仅 `session.blank` 时渲染），玩家一开口即消失。内容是**一次真实模型调用生成的整段开场**，而不是卡里的静态字段：
   - 生成发生在 `GET /tavern/greeting?sessionId=` 首次请求时，用 `agentDefaultModel.currentSelection()` 取 provider/model（冷会话还没有请求头，这是唯一来源），提示词要求「1–2 段旁白铺陈场景 + 1–2 位角色开口」，并强制 `{"segments":[...]}` 的 JSON 输出。
   - 结果按会话存到 `.dshtavern/stories/<session>/opening.json`，重开不再生成；舞台已有内容时不再生成（迟到的开场会读成第二个开头）。
-  - 生成完成后，脚本作为**独立的 turn 0** 写入会话记录（`turn/start` → `step/start` → `assistant/message` → `step/end` → `turn/end`），因此在对话流里出现在玩家第一句话**之前**，也会进入模型的派生历史。靠 `turnBoundary` 投影的 `lastTurn > 0` 判断故事是否已开始，已开始则不再写入。
-  - 同时按旁白/台词顺序写进**舞台**（导演与角色读到的历史）。舞台始终写；本轮回复的分段只在 turn 0 写入失败时才带上开场，避免重复显示。
+  - 生成完成后，卡片调用 `POST /tavern/opening` 排队一个**开场回合**：宿主用 `sessionController.resolveAgent()` 取回 Agent，投递一条 `source.kind = 'tavern-opening'` 的 followup 消息。回合由 agent loop 打开（turn 编号归它所有），编排器识别这个来源后不调用导演，直接把脚本分段写进本回合回复与舞台，因此开场出现在玩家第一句话**之前**，并进入模型的派生历史。
+  - **不能从插件里直接 append turn 事件**：v4 会话格式要求 turn 从 1 开始，且 `system/message` 必须是 surface 第一个节点。手工写的 turn 0 能进内存日志，但重载时会报 `turn/start does not open the expected turn` 或 `system/message requires a protected first surface head`，整个会话变成不可读——本次就是这么发现并修复的。
+  - 开场回合落盘后舞台必然已有内容，`requestOpening` 先看舞台长度再看 `turnBoundary`，第二次触发直接返回，不会写出第二个开头。
+  - 同时按旁白/台词顺序写进**舞台**（导演与角色读到的历史）。只有 `stage` 为空时才会走到兜底路径（玩家在脚本生成完成前就发言），此时开场并入本回合回复。
   - 生成失败或解析不出可用段落时，回退到静态开场：`scenario` 作旁白、`greetings.first` 作台词，各取「名册顺序里第一个真正有内容的卡」。`greetings.alternates` 尚未使用（重开需搭配重生成）。
-  - **样式归属**：开场卡的规则放在 `PANEL_CSS`，由侧栏标记那个常驻 effect 注入；不能放 `TOOLBOX_CSS`——它只在工具箱浮层打开时挂载，会让卡片完全没有样式。`--tv-*` 设计变量同时声明在 `.dshtavern-panel` 和 `.dshtavern-greeting` 上，因为卡片渲染在会话 dock 里、不在面板内，只声明在面板上会让它的所有 `calc()` 失效。
+  - **样式归属**：开场卡的规则放在 `PANEL_CSS`，由侧栏标记那个常驻 effect 注入；不能放 `TOOLBOX_CSS`——它只在工具箱浮层打开时挂载，会让卡片完全没有样式。`--tv-*` 设计变量同时声明在 `.dshtavern-panel`、`.dshtavern-greeting` 和 `.dshtavern-regenerate-row` 上，因为后两者渲染在会话里、不在面板内，只声明在面板上会让它们的所有 `calc()` 失效。
   - **生成中状态与并发**：一次生成通常十几秒，卡片在此期间显示转圈、「正在生成开场…」和一行说明（尊重 `prefers-reduced-motion`）。按 story 目录去重：预聊天卡片与第一个 beat 请求同一次生成，玩家在转圈期间直接发言也不会触发第二次调用，更不会让静态兜底抢在生成前面。
-- 自动绑定 preset；`rp` 与 `novel` 工作区分别绑定 `tavern-rp` / `tavern-novel`。
+- 自动绑定 preset（`rp` → `tavern-rp`，`novel` → `tavern-novel`）。
+- 重新生成：转写只追加，DSH 没有原地改写某条回复的机制，所以「重来」实现为**回退剧情状态后重演这一幕**：
+  - 只有最新一幕能重生成。`/tavern/regenerate` 先比对调用方给的 turn 与最新 beat 记录的 turn，不一致就拒绝——更旧的回合之后每一幕都得一起丢弃，而界面无法撤回。
+  - 回退点来自 beat 记录：`stageCountBefore`（这一幕开始前的舞台长度）与 `worldBefore`（当时的导演世界状态）。旧记录缺这两个字段时，用记录里描述的旁白/台词条数反推。
+  - 裁切**只在内存里算**，落盘发生在重演结束之后：模型调用失败时剧情文件保持原样，不会「旧的删了、新的没写成」。
+  - 重演推进一次正常 beat，新回复作为**下一轮**追加；被取代的回合写进 `regenerations.json`（`turn` → `replacement`），客户端据此把旧回复标成「这一条已被第 N 轮重新生成取代」，并沿替换链找到最终文本。旧回复仍留在转写里，这是只追加模型的必然结果。
+  - 触发器是一条 `source.kind = 'tavern-regenerate'` 的 followup 消息，编排器靠它区分「重演」与「玩家真打了一模一样的字」；玩家输入从 beat 记录里取回。同一会话 120 秒内只接受一次排队，双击不会重演两次。
+  - 重演期间舞台被原地追加（下一条 prompt 要读最新状态），落盘必须直接写这份数组，不能再拼一次 `staged`——否则每一行都会写两遍。
+  - 客户端只在「最新已结束回合」且宿主报告它可重放时显示按钮；`GET /tavern/regenerate` 同时返回替换记录与 `replayableTurn`，开场刚结束、还没有 beat 的会话不会出现必然失败的按钮。
 - 用量统计子插件：工作区总量、当前会话用量、输入/输出拆分、上下文占用条、缓存命中率条、会话明细表；每 10 秒刷新。面板内容限宽 720px 居中，两卡两表双列自适应（窄窗降为单列并隐藏次要列）。实测面板数值与 DSH 自身状态栏一致（12.2k tokens、命中率 12.3%、上下文 1.05%）。
-- 测试与构建：`pnpm test` 276 项通过（20 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
+- 测试与构建：`pnpm test` 300 项通过（23 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
 
 ## 九、未完成与已知问题
 
@@ -183,12 +193,16 @@
 - **一个 beat 的用量合并成一条**：导演与各角色的多次调用累加后作为单条 `usage` chunk 上报，所以面板显示的是整轮总额，分不出哪次调用花了多少；分次明细只在 `beats/*.json` 的 `turns` 里。
 - **不报告 tok/s**：编排器用一次 `block-end` 交付整轮文本，不产生 `text-delta`。DSH 的输出速度取「首个 token delta 到消息落盘」的窗口，而这一整轮实际包含多次串行模型调用；若合成一个 delta，会把几秒的工作算成几十万 tok/s。代价是状态栏不显示输出速度，token 数、缓存命中率与正文渲染都不受影响。
 - **历史会话的旧 tok/s 不会自愈**：`sessionStats` 是贯穿整个会话的累计投影，修复前录下的异常 `decodeMs` 会保留在该会话里；新建会话即恢复正常。
+- **重新生成会留下旧回复**：DSH 的转写只追加，旧回合不会被删除，只会被标成「已被第 N 轮取代」。它的 token 也照常计入用量。
+- **只能重生成最新一幕**：按钮只出现在最新已结束回合下。更早的回合要求连同其后所有回合一起回退，而只追加的转写无法表达。
+- **旧 beat 没有回退快照**：`stageCountBefore` / `worldBefore` 是这次才加的字段。旧记录靠条数反推裁切点，世界状态无法还原，重演会从当前世界起步。
+- **开场/重生成回合的触发行标题是通用的**：开场与重新生成都表现为一条唤起回合的消息，`ui-chat` 的 `turn-trigger` 按 `source.kind` 取标题，未知 kind 一律显示「收到执行请求」。插件没有覆盖这个节点的插槽（覆盖会影响所有会话），所以只有展开后才看得到「生成开场」/「重新生成上一幕」的说明。
 
 ## 十、验证方式
 
 ```sh
 pnpm install
-pnpm test        # 10 个文件、155 项，全离线
+pnpm test        # 23 个文件、300 项，全离线
 pnpm build       # 宿主 tsc + 浏览器 tsdown
 ```
 

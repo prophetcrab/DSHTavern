@@ -12,9 +12,11 @@
 export const PANEL_CSS = `
 /* Tokens are declared on both the panel and the pre-chat card: the card renders
    in the conversation dock, outside the panel, so panel-only variables would
-   leave every calc() in it unresolved. */
+   leave every calc() in it unresolved. The turn-tail regeneration row is in the
+   conversation too, for the same reason. */
 .dshtavern-panel,
-.dshtavern-greeting {
+.dshtavern-greeting,
+.dshtavern-regenerate-row {
   --tv-scale: 1;
   --tv-fs-body: calc(13.5px * var(--tv-scale));
   --tv-fs-small: calc(11.5px * var(--tv-scale));
@@ -46,11 +48,11 @@ export const PANEL_CSS = `
   color: var(--dsw-alias-label-primary);
   font-family: var(--dsw-font-family, system-ui, sans-serif);
 }
-@media (min-width: 1280px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.05; } }
-@media (min-width: 1600px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.12; } }
-@media (min-width: 1920px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.18; } }
-@media (min-width: 2300px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.25; } }
-@media (min-width: 2560px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.32; } }
+@media (min-width: 1280px) { .dshtavern-panel, .dshtavern-greeting, .dshtavern-regenerate-row { --tv-scale: 1.05; } }
+@media (min-width: 1600px) { .dshtavern-panel, .dshtavern-greeting, .dshtavern-regenerate-row { --tv-scale: 1.12; } }
+@media (min-width: 1920px) { .dshtavern-panel, .dshtavern-greeting, .dshtavern-regenerate-row { --tv-scale: 1.18; } }
+@media (min-width: 2300px) { .dshtavern-panel, .dshtavern-greeting, .dshtavern-regenerate-row { --tv-scale: 1.25; } }
+@media (min-width: 2560px) { .dshtavern-panel, .dshtavern-greeting, .dshtavern-regenerate-row { --tv-scale: 1.32; } }
 .dshtavern-panel * { box-sizing: border-box; }
 .dshtavern-card {
   display: flex;
@@ -517,6 +519,44 @@ export const PANEL_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .dshtavern-opening-spinner { animation: none; border-top-color: color-mix(in srgb, var(--tv-accent) 60%, transparent); }
 }
+/* Regeneration sits in the turn-tail action row, next to the shipped message
+   actions. It must read as a quiet secondary control, not a primary CTA. */
+.dshtavern-regenerate-row {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--tv-scale));
+  min-width: 0;
+}
+.dshtavern-regenerate-action {
+  padding: calc(3px * var(--tv-scale)) calc(9px * var(--tv-scale));
+  border: var(--tv-hairline) solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--tv-fs-small);
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.dshtavern-regenerate-action:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-primary);
+}
+.dshtavern-regenerate-action:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--tv-accent);
+  outline-offset: 2px;
+}
+.dshtavern-regenerate-action:disabled { cursor: default; opacity: 0.6; }
+.dshtavern-regenerate-superseded {
+  font-size: var(--tv-fs-small);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+.dshtavern-regenerate-error { font-size: var(--tv-fs-small); line-height: 1.5; color: var(--dsw-alias-state-error-primary); }
 `
 
 /** Shared class names; every rule is prefixed with `dshtavern-`. */

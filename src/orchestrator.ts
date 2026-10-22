@@ -44,6 +44,27 @@ export type BeatSegment =
   | { readonly kind: 'narration'; readonly text: string }
   | { readonly kind: 'speech'; readonly name: string; readonly text: string }
 
+/** Where a turn's speaking character came from. */
+export type SpeakerSource = 'director' | 'player-mention' | 'fallback-first'
+
+/** One director/character exchange inside a beat, kept for inspection and replay. */
+export interface BeatTurn {
+  directorSystem: string
+  directorReply: string
+  decision: DirectorDecision
+  /** Route and model the director call used. */
+  directorModel?: { readonly provider: string; readonly model: string }
+  /** Route and model the character call used. */
+  characterModel?: { readonly provider: string; readonly model: string }
+  /** How the speaking character was chosen, when one spoke. */
+  speakerSource?: SpeakerSource
+  /** Character the orchestrator actually used; differs from the director's pick when overridden. */
+  effectiveSpeaker?: { readonly id: string; readonly name: string }
+  characterSystem?: string
+  characterPromptMessages?: readonly { role: string; text: string }[]
+  speech?: string
+}
+
 /** Evidence of one orchestrated beat, written for inspection. */
 export interface BeatRecord {
   at: string
@@ -55,7 +76,21 @@ export interface BeatRecord {
   characterPromptMessages?: readonly { role: string; text: string }[]
   speech?: string
   /** Every director/character exchange this beat ran, in order. */
-  turns?: readonly unknown[]
+  turns?: readonly BeatTurn[]
+  /** DSH turn that produced this beat, when the loop had opened it. */
+  turn?: number
+  /**
+   * Stage length before this beat staged anything.
+   *
+   * Regeneration truncates here so the discarded draft never reaches the next
+   * prompt. Absent on beats written before this field existed; those fall back
+   * to counting the lines the record itself describes.
+   */
+  stageCountBefore?: number
+  /** World snapshot before this beat wrote to it; absent on older records. */
+  worldBefore?: WorldState
+  /** Timestamp of the beat this one replaced, when it is a regeneration. */
+  regeneratedFrom?: string
 }
 /** How many staged lines a character reads; older lines are dropped first. */
 export const STAGE_WINDOW = 40

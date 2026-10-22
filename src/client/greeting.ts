@@ -97,6 +97,27 @@ async function fetchOpening(workspaceId: string, sessionId: string | undefined):
 }
 
 /**
+ * Ask the host to run the opening as a real turn.
+ *
+ * Transcript order is turn order, and only the agent loop can open a turn, so
+ * the card cannot insert the opening itself. Queuing it as a trigger turn is
+ * what makes the opening appear above the player's first message; the card
+ * stays visible until that turn lands.
+ * @param workspaceId - registered tavern workspace id.
+ * @param sessionId - chat identity.
+ * @returns whether a turn was queued.
+ */
+async function requestOpeningTurn(workspaceId: string, sessionId: string): Promise<boolean> {
+  const response = await fetch('/tavern/opening', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ workspaceId, sessionId }),
+  })
+  const body = await response.json() as { ok?: unknown; queued?: unknown }
+  return body.ok === true && body.queued === true
+}
+
+/**
  * Show the scene and first line above the composer while the chat is blank.
  * @param props - session identity and blank flag.
  * @returns the card, or `null` when it does not apply.
@@ -131,9 +152,16 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
     // card reports progress instead of leaving the player staring at nothing.
     let cancelled = false
     setLoading(true)
-    fetchOpening(station.workspaceId, props.session.sessionId).then((next) => {
+    fetchOpening(station.workspaceId, props.session.sessionId).then(async (next) => {
       if (cancelled) return
       setOpening(next ?? null)
+      // The card is only a preview once the script exists. Queueing the turn is
+      // what puts the opening above the player's first message, so it happens
+      // here rather than when the player speaks.
+      if (next !== undefined) {
+        await requestOpeningTurn(station.workspaceId, props.session.sessionId).catch(() => false)
+      }
+      if (cancelled) return
       setLoading(false)
     }).catch(() => {
       if (cancelled) return

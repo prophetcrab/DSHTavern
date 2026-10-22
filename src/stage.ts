@@ -189,6 +189,74 @@ export async function appendStage(
 }
 
 /**
+ * Replace the whole stage with a new line list.
+ *
+ * Regeneration replays the newest beat, so its discarded narration and speech
+ * must leave the stage before the replay reads it; otherwise the new beat reads
+ * its own discarded draft as established history and continues from it. The
+ * write happens only after the replay settles, so a failed replay leaves the
+ * story exactly as it was rather than deleting the beat it could not replace.
+ * Sequence numbers are reassigned from the new head because nothing outside
+ * the stage stores them.
+ * @param workspaceDir - tavern workspace root.
+ * @param lines - complete replacement content, in story order.
+ * @param session - owning session id, when addressing a chat.
+ * @returns the written entries.
+ */
+export async function writeStage(
+  workspaceDir: string,
+  lines: readonly Omit<StageEntry, 'seq' | 'at'>[],
+  session?: string,
+): Promise<StageEntry[]> {
+  const at = new Date().toISOString()
+  // Fields are picked explicitly: the caller may pass entries that already
+  // carry `seq`/`at` (a replayed stage), and a spread would let those stale
+  // values win over the renumbering this function promises.
+  const entries: StageEntry[] = lines.map((line, index) => ({
+    seq: index + 1,
+    at,
+    kind: line.kind,
+    text: line.text,
+    scope: line.scope,
+    ...(line.speaker === undefined ? {} : { speaker: line.speaker }),
+    ...(line.speakerName === undefined ? {} : { speakerName: line.speakerName }),
+  }))
+  const directory = storyDirectory(workspaceDir, session)
+  await mkdir(directory, { recursive: true })
+  const target = stagePath(workspaceDir, session)
+  const temporary = `${target}.tmp-${randomUUID()}`
+  const text = entries.map(entry => `${JSON.stringify(entry)}\n`).join('')
+  await writeFile(temporary, text, 'utf8')
+  try {
+    await rename(temporary, target)
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined)
+    throw error
+  }
+  return entries
+}
+
+/**
+ * Parse a stored world snapshot.
+ *
+ * Shared with beat replay, which restores the snapshot a regenerated beat
+ * started from; both readers must agree on what a partial or damaged file
+ * means, so the rule lives here once.
+ * @param value - parsed JSON value.
+ * @returns the world; an empty one for anything unusable.
+ */
+export function parseWorld(value: unknown): WorldState {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return emptyWorld()
+  const record = value as Record<string, unknown>
+  return {
+    scene: typeof record.scene === 'string' ? record.scene : '',
+    facts: stringList(record.facts),
+    hidden: stringList(record.hidden),
+    ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}),
+  }
+}
+
+/**
  * Read the director's world snapshot.
  * @param workspaceDir - tavern workspace root.
  * @returns the stored world, or an empty one before the first write.
@@ -201,19 +269,10 @@ export async function readWorld(workspaceDir: string, session?: string): Promise
     if (isMissing(error)) return emptyWorld()
     throw error
   }
-  let value: unknown
   try {
-    value = JSON.parse(text)
+    return parseWorld(JSON.parse(text))
   } catch {
     return emptyWorld()
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return emptyWorld()
-  const record = value as Record<string, unknown>
-  return {
-    scene: typeof record.scene === 'string' ? record.scene : '',
-    facts: stringList(record.facts),
-    hidden: stringList(record.hidden),
-    ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}),
   }
 }
 

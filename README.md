@@ -4,6 +4,8 @@
 
 **一个酒馆 = 一个带标记的工作区；每个聊天 = 一条会话；每轮 = 一次导演调用 + 每位开口角色各一次独立调用。** 导演决定旁白、节奏和谁说话，角色只看到自己的卡和可观察的舞台——两个角色不会互相污染语气，也不会看到导演的私有剧情。
 
+**会话里有两个酒馆专属动作**：开场回合（新会话在玩家开口前先由模型生成整段开场，作为独立的第一轮写进对话）和重新生成（回退这一幕的舞台与世界状态后重演，旧回复标记为已被取代）。
+
 - 架构与开发进度（唯一事实来源，随改动更新）：[docs/architecture.md](docs/architecture.md)
 - 决策文档（为什么这样设计）：[docs/decisions/](docs/decisions/)
 - 设计文档（准备采用的方案）：[docs/design/](docs/design/)
@@ -47,7 +49,8 @@
     stories/<session>/
       stage.jsonl            # 舞台：追加写的旁白与台词
       world.json             # 导演私有：场景 / 事实 / 未揭示剧情
-      beats/<timestamp>.json # 每次 beat 的完整证据
+      beats/<timestamp>.json # 每次 beat 的完整证据（含回退所需的舞台长度与世界快照）
+      regenerations.json     # 被重新生成取代的回合 → 替代回合
   characters/<id>.charc      # 角色卡
   prompts/prompt.json        # 角色提示词编排
   prompts/director.json      # 导演提示词编排
@@ -63,12 +66,14 @@
 
 创建时必须选择模式（角色扮演 / 小说），创建后不可更改。面板自动刷新（挂载时、每 4 秒、窗口重新获得焦点时、每次操作后）。
 
+最新一条回复下方有 **重新生成**：回退到这一幕开始前的舞台与世界状态，让导演和角色重演一次。新回复作为下一轮追加，旧回复保留并标记「这一条已被第 N 轮重新生成取代」——DSH 的转写只追加，无法原地改写，所以旧回复不会消失。只有最新的回复能重生成。
+
 ## 开发
 
 ```sh
 pnpm install
 pnpm build      # 宿主 tsc + 浏览器半 tsdown
-pnpm test       # 219 项，全离线
+pnpm test       # 300 项，全离线
 pnpm typecheck
 ```
 
