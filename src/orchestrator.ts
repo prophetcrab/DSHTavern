@@ -81,6 +81,8 @@ export interface BeatLimits {
   readonly maxSpeechesPerBeat?: number
   /** Staged lines every prompt carries. */
   readonly stageWindow?: number
+  /** Character cap on the staged transcript; absent means only the line budget applies. */
+  readonly stageMaxChars?: number
   /** Recent stage lines the worldbook scan covers. */
   readonly loreScanLines?: number
   /** Worldbook entries one request may inject. */
@@ -94,16 +96,49 @@ export interface BeatLimits {
 }
 
 /** Resolve the optional knobs against the shipped constants. */
-function limitsOf(limits: BeatLimits | undefined): Required<BeatLimits> {
+function limitsOf(limits: BeatLimits | undefined): Required<Omit<BeatLimits, 'stageMaxChars'>> & { stageMaxChars?: number } {
   return {
     maxSpeechesPerBeat: limits?.maxSpeechesPerBeat ?? MAX_SPEECHES_PER_BEAT,
     stageWindow: limits?.stageWindow ?? STAGE_WINDOW,
+    ...(limits?.stageMaxChars === undefined ? {} : { stageMaxChars: limits.stageMaxChars }),
     loreScanLines: limits?.loreScanLines ?? WORLDBOOK_SCAN_LINES,
     loreMaxEntries: limits?.loreMaxEntries ?? WORLDBOOK_ACTIVE_MAX,
     loreMaxChars: limits?.loreMaxChars ?? WORLDBOOK_ACTIVE_CHARS_MAX,
     playerInputMax: limits?.playerInputMax ?? PLAYER_INPUT_MAX,
     rotateSpeakers: limits?.rotateSpeakers ?? true,
   }
+}
+
+/**
+ * Keep the newest staged lines that fit a character budget.
+ *
+ * The line budget alone stops bounding a prompt once it is large: an author can
+ * raise it for long scenes and get a transcript whose size depends on how wordy
+ * each line happened to be. Trimming from the front keeps the most recent
+ * exchange, which is what every reader in the beat actually needs.
+ * @param entries - staged lines, oldest first.
+ * @param maxLines - line budget applied first.
+ * @param maxChars - character budget, or undefined for none.
+ * @returns the kept tail.
+ */
+export function tailWithinChars<T extends { readonly text: string }>(
+  entries: readonly T[],
+  maxLines: number,
+  maxChars: number | undefined,
+): readonly T[] {
+  const tail = entries.slice(-maxLines)
+  if (maxChars === undefined) return tail
+  let total = 0
+  let first = tail.length
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    const text = tail[index]?.text ?? ''
+    // Always keep the newest line, even when it alone exceeds the budget: an
+    // empty transcript would hide the turn that just happened.
+    if (total + text.length > maxChars && first < tail.length) break
+    total += text.length
+    first = index
+  }
+  return tail.slice(first)
 }
 
 export function buildDirectorSystem(input: {
@@ -122,7 +157,7 @@ export function buildDirectorSystem(input: {
   const roster = input.cast.length === 0
     ? '（当前没有角色卡）'
     : input.cast.map(member => `- ${member.id} | ${member.name} | ${member.brief}`).join('\n')
-  const transcript = renderStage(input.stage.slice(-limits.stageWindow)) || '（剧情尚未开始）'
+  const transcript = renderStage(tailWithinChars(input.stage, limits.stageWindow, limits.stageMaxChars)) || '（剧情尚未开始）'
   const recentSpeaker = lastSpeakerName(input.stage)
   const lore = activateEntries({
     entries: input.worldbook ?? [],
@@ -259,7 +294,7 @@ export function buildCharacterSystem(input: {
   readonly limits?: BeatLimits
 }): string {
   const limits = limitsOf(input.limits)
-  const contextText = renderStage(input.stage.slice(-limits.stageWindow))
+  const contextText = renderStage(tailWithinChars(input.stage, limits.stageWindow, limits.stageMaxChars))
   const triggerText = [contextText, input.narration ?? '', input.playerInput ?? '']
     .filter(part => part.length > 0)
     .join('\n')

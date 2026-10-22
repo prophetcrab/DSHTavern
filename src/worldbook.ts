@@ -83,7 +83,7 @@ export interface WorldbookFile {
 }
 
 /** Largest entry content accepted. */
-export const WORLDBOOK_CONTENT_MAX = 16_000
+export const WORLDBOOK_CONTENT_MAX = 64_000
 
 /** Largest number of entries a workspace may store. */
 export const WORLDBOOK_ENTRIES_MAX = 512

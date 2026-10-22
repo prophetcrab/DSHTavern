@@ -61,6 +61,15 @@ export interface TavernAgentConfig {
   readonly maxSpeechesPerBeat: number
   /** Staged lines every prompt carries. */
   readonly stageWindow: number
+  /**
+   * Character cap on the staged transcript every prompt carries.
+   *
+   * Absent means only {@link stageWindow} bounds it. A line budget alone stops
+   * being predictable once it is large enough for long narration lines to add
+   * up, so a 1M-context workspace can cap characters instead of guessing how
+   * many lines fit.
+   */
+  readonly stageMaxChars?: number
   /** Recent stage lines the worldbook scan covers. */
   readonly loreScanLines: number
   /** Worldbook entries one request may inject. */
@@ -103,14 +112,57 @@ export interface TavernAgentConfig {
 /** Inclusive bounds enforced on every field. */
 export const AGENT_CONFIG_LIMITS = {
   maxSpeechesPerBeat: { min: 1, max: 6 },
-  stageWindow: { min: 4, max: 200 },
-  loreScanLines: { min: 4, max: 200 },
-  loreMaxEntries: { min: 1, max: 20 },
-  loreMaxChars: { min: 200, max: 40_000 },
-  playerInputMax: { min: 200, max: 20_000 },
+  // Ceilings sized for a 1M-token context window (~1.67M Chinese characters):
+  // the largest preset together spends well under half of it, leaving room for
+  // the system prompt, the card, and the reply.
+  stageWindow: { min: 4, max: 2000 },
+  stageMaxChars: { min: 1000, max: 400_000 },
+  loreScanLines: { min: 4, max: 2000 },
+  loreMaxEntries: { min: 1, max: 200 },
+  loreMaxChars: { min: 200, max: 400_000 },
+  playerInputMax: { min: 200, max: 120_000 },
   maxReplyChars: { min: 20, max: 8000 },
   reasoningReserveTokens: { min: 0, max: 16_000 },
 } as const
+
+/**
+ * Context budget presets, from the shipped defaults to a 1M-context setting.
+ *
+ * `extreme` sums to roughly 420k tokens of history and lore at typical line
+ * lengths, so it stays inside a 1M window alongside the system prompt and the
+ * reply while using far more of it than the old ceilings allowed.
+ */
+export const CONTEXT_PRESETS = {
+  compact: {
+    label: '精简',
+    stageWindow: 40, loreScanLines: 20, loreMaxEntries: 8, loreMaxChars: 6000, playerInputMax: 8000,
+  },
+  standard: {
+    label: '标准',
+    stageWindow: 200, loreScanLines: 60, loreMaxEntries: 24, loreMaxChars: 40_000, playerInputMax: 20_000,
+  },
+  roomy: {
+    label: '充裕',
+    stageWindow: 800, loreScanLines: 200, loreMaxEntries: 80, loreMaxChars: 160_000, playerInputMax: 60_000,
+  },
+  extreme: {
+    label: '极限',
+    stageWindow: 2000, loreScanLines: 500, loreMaxEntries: 200, loreMaxChars: 400_000, playerInputMax: 120_000,
+  },
+} as const
+
+/** Which preset, if any, matches a budget; `undefined` when it is a custom mix. */
+export function contextPresetOf(config: TavernAgentConfig): keyof typeof CONTEXT_PRESETS | undefined {
+  for (const [id, preset] of Object.entries(CONTEXT_PRESETS)) {
+    const matches = preset.stageWindow === config.stageWindow
+      && preset.loreScanLines === config.loreScanLines
+      && preset.loreMaxEntries === config.loreMaxEntries
+      && preset.loreMaxChars === config.loreMaxChars
+      && preset.playerInputMax === config.playerInputMax
+    if (matches) return id as keyof typeof CONTEXT_PRESETS
+  }
+  return undefined
+}
 
 /**
  * Default reasoning headroom added to a reply cap.
@@ -233,6 +285,8 @@ export function normalizeAgentConfig(value: unknown): TavernAgentConfig {
   const characterMaxReplyChars = replyBudgetMap(record.characterMaxReplyChars)
   const reasoningReserveTokens = optionalIntegerIn(record.reasoningReserveTokens, '推理预留 token',
     AGENT_CONFIG_LIMITS.reasoningReserveTokens.min, AGENT_CONFIG_LIMITS.reasoningReserveTokens.max)
+  const stageMaxChars = optionalIntegerIn(record.stageMaxChars, '角色可见舞台字数上限',
+    AGENT_CONFIG_LIMITS.stageMaxChars.min, AGENT_CONFIG_LIMITS.stageMaxChars.max)
   return {
     schema: AGENT_CONFIG_SCHEMA,
     maxSpeechesPerBeat: integerIn(record.maxSpeechesPerBeat, '每幕最多发言角色数',
@@ -255,6 +309,7 @@ export function normalizeAgentConfig(value: unknown): TavernAgentConfig {
     ...(directorMaxReplyChars === undefined ? {} : { directorMaxReplyChars }),
     ...(characterMaxReplyChars === undefined ? {} : { characterMaxReplyChars }),
     ...(reasoningReserveTokens === undefined ? {} : { reasoningReserveTokens }),
+    ...(stageMaxChars === undefined ? {} : { stageMaxChars }),
     ...(directorModel === undefined ? {} : { directorModel }),
     ...(characterModel === undefined ? {} : { characterModel }),
   }

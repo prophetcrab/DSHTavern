@@ -36,6 +36,8 @@ export interface AgentConfigView {
   readonly directorMaxReplyChars?: number
   /** Per-character reply budgets keyed by card id; overrides the shared one. */
   readonly characterMaxReplyChars?: Readonly<Record<string, number>>
+  /** Character cap on the staged transcript; absent means only the line budget applies. */
+  readonly stageMaxChars?: number
   /** Tokens added to the cap so the model can think without eating the whole reply. */
   readonly reasoningReserveTokens?: number
   readonly directorModel?: AgentModelChoiceView
@@ -59,11 +61,12 @@ interface AgentConfigSnapshot {
 /** Inclusive bounds, mirrored from the host so the inputs can clamp in place. */
 export const AGENT_LIMITS = {
   maxSpeechesPerBeat: { min: 1, max: 6, step: 1, unit: '个角色' },
-  stageWindow: { min: 4, max: 200, step: 1, unit: '行' },
-  loreScanLines: { min: 4, max: 200, step: 1, unit: '行' },
-  loreMaxEntries: { min: 1, max: 20, step: 1, unit: '条' },
-  loreMaxChars: { min: 200, max: 40_000, step: 100, unit: '字' },
-  playerInputMax: { min: 200, max: 20_000, step: 100, unit: '字' },
+  stageWindow: { min: 4, max: 2000, step: 10, unit: '行' },
+  stageMaxChars: { min: 1000, max: 400_000, step: 1000, unit: '字' },
+  loreScanLines: { min: 4, max: 2000, step: 10, unit: '行' },
+  loreMaxEntries: { min: 1, max: 200, step: 1, unit: '条' },
+  loreMaxChars: { min: 200, max: 400_000, step: 1000, unit: '字' },
+  playerInputMax: { min: 200, max: 120_000, step: 1000, unit: '字' },
   maxReplyChars: { min: 20, max: 8000, step: 20, unit: '字' },
   reasoningReserveTokens: { min: 0, max: 16_000, step: 64, unit: 'token' },
 } as const
@@ -71,7 +74,39 @@ export const AGENT_LIMITS = {
 type NumericField = keyof typeof AGENT_LIMITS
 
 /** Numeric fields that are always present in the config (the reply budgets are optional). */
-type RequiredNumericField = Exclude<NumericField, 'maxReplyChars' | 'reasoningReserveTokens'>
+type RequiredNumericField = Exclude<NumericField, 'maxReplyChars' | 'reasoningReserveTokens' | 'stageMaxChars'>
+
+/**
+ * Context budget presets, mirrored from the host.
+ *
+ * The shipped defaults were sized for a small window; these scale up to what a
+ * 1M-token context can actually use.
+ */
+export const CONTEXT_PRESETS = {
+  compact: { label: '精简', stageWindow: 40, loreScanLines: 20, loreMaxEntries: 8, loreMaxChars: 6000, playerInputMax: 8000 },
+  standard: { label: '标准', stageWindow: 200, loreScanLines: 60, loreMaxEntries: 24, loreMaxChars: 40_000, playerInputMax: 20_000 },
+  roomy: { label: '充裕', stageWindow: 800, loreScanLines: 200, loreMaxEntries: 80, loreMaxChars: 160_000, playerInputMax: 60_000 },
+  extreme: { label: '极限', stageWindow: 2000, loreScanLines: 500, loreMaxEntries: 200, loreMaxChars: 400_000, playerInputMax: 120_000 },
+} as const
+
+type ContextPresetId = keyof typeof CONTEXT_PRESETS
+
+/**
+ * Which preset a config currently matches.
+ * @param config - current settings.
+ * @returns the preset id, or `undefined` for a custom mix.
+ */
+export function contextPresetOf(config: AgentConfigView): ContextPresetId | undefined {
+  for (const [id, preset] of Object.entries(CONTEXT_PRESETS)) {
+    const matches = preset.stageWindow === config.stageWindow
+      && preset.loreScanLines === config.loreScanLines
+      && preset.loreMaxEntries === config.loreMaxEntries
+      && preset.loreMaxChars === config.loreMaxChars
+      && preset.playerInputMax === config.playerInputMax
+    if (matches) return id as ContextPresetId
+  }
+  return undefined
+}
 
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
@@ -380,6 +415,7 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
       disabled,
       onChange: value => update({ [field]: value } as Partial<AgentConfigView>),
     })
+  const activePreset = contextPresetOf(config)
 
   return createElement('section', { className: 'dshtavern-agent' },
     createElement('div', { className: 'dshtavern-agent-toolbar' },
@@ -450,11 +486,60 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
       createElement('div', { className: 'dshtavern-agent-group-title' }, '上下文预算'),
       createElement('div', { className: 'dshtavern-agent-group-note' },
         '这些值决定每次模型调用带上多少历史与设定。调大更连贯，也更费 token。'),
+      createElement('div', { className: 'dshtavern-agent-quick' },
+        createElement('span', { className: 'dshtavern-agent-hint' }, '一键预设：'),
+        (Object.entries(CONTEXT_PRESETS) as [ContextPresetId, typeof CONTEXT_PRESETS[ContextPresetId]][]).map(([id, preset]) =>
+          createElement('button', {
+            key: id,
+            type: 'button',
+            className: 'dshtavern-button dshtavern-agent-quick-button',
+            'data-active': activePreset === id ? 'true' : 'false',
+            disabled,
+            title: `${preset.stageWindow} 行 / 扫描 ${preset.loreScanLines} 行 / 世界书 ${preset.loreMaxEntries} 条 ${preset.loreMaxChars} 字`,
+            onClick: () => update({
+              stageWindow: preset.stageWindow,
+              loreScanLines: preset.loreScanLines,
+              loreMaxEntries: preset.loreMaxEntries,
+              loreMaxChars: preset.loreMaxChars,
+              playerInputMax: preset.playerInputMax,
+            }),
+          }, preset.label)),
+        activePreset === undefined
+          ? createElement('span', { className: 'dshtavern-agent-hint' }, '（自定义）')
+          : null),
       num('stageWindow', '角色可见舞台行数', '每个角色能看到最近多少条旁白与台词。'),
       num('loreScanLines', '世界书扫描行数', '关键词匹配回溯多少条舞台记录。'),
       num('loreMaxEntries', '世界书最多条数', '单次请求最多注入多少条命中条目。'),
       num('loreMaxChars', '世界书最多字数', '单次请求注入条目内容的总字数上限。'),
-      num('playerInputMax', '玩家输入上限', '超过这个长度的玩家输入会被截断。')),
+      num('playerInputMax', '玩家输入上限', '超过这个长度的玩家输入会被截断。'),
+      createElement('label', { className: 'dshtavern-agent-row' },
+        createElement('span', { className: 'dshtavern-agent-row-text' },
+          createElement('span', { className: 'dshtavern-agent-label' }, '舞台字数上限'),
+          createElement('span', { className: 'dshtavern-agent-hint' },
+            '可选。行数很大时用它兜住总字数，超出时从最旧的记录开始丢弃；留空只按行数裁剪。')),
+        createElement('span', { className: 'dshtavern-agent-input-wrap' },
+          createElement('input', {
+            className: 'dshtavern-agent-input',
+            type: 'number',
+            min: AGENT_LIMITS.stageMaxChars.min,
+            max: AGENT_LIMITS.stageMaxChars.max,
+            step: AGENT_LIMITS.stageMaxChars.step,
+            placeholder: '不限',
+            value: config.stageMaxChars === undefined ? '' : String(config.stageMaxChars),
+            disabled,
+            onChange: (event: { target: { value: string } }) => {
+              const raw = event.target.value.trim()
+              if (raw.length === 0) {
+                update({ stageMaxChars: undefined })
+                return
+              }
+              const parsed = Number(raw)
+              if (!Number.isFinite(parsed)) return
+              const { min, max } = AGENT_LIMITS.stageMaxChars
+              update({ stageMaxChars: Math.min(max, Math.max(min, Math.round(parsed))) })
+            },
+          }),
+          createElement('span', { className: 'dshtavern-agent-unit' }, AGENT_LIMITS.stageMaxChars.unit)))),
 
     createElement('div', { className: 'dshtavern-agent-group' },
       createElement('div', { className: 'dshtavern-agent-group-title' }, '角色分工模型'),

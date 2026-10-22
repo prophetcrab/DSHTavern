@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   AGENT_CONFIG_LIMITS,
   AgentConfigInvalidError,
+  CONTEXT_PRESETS,
   DEFAULT_REASONING_RESERVE,
+  contextPresetOf,
   defaultAgentConfig,
   normalizeAgentConfig,
   replyBudgetChars,
   replyCapTokens,
   tokensForChars,
 } from '../src/agent-config.ts'
-import { mentionedSpeaker } from '../src/orchestrator.ts'
+import { mentionedSpeaker, tailWithinChars } from '../src/orchestrator.ts'
 
 const CAST = [
   { id: 'a4f6540e-e289-4fd9-89e3-1653408cc286', name: '林见夏', brief: '售票员' },
@@ -49,9 +51,9 @@ describe('agent config validation', () => {
     })
     expect(config.maxSpeechesPerBeat).toBe(6)
     expect(config.stageWindow).toBe(4)
-    expect(config.loreScanLines).toBe(200)
+    expect(config.loreScanLines).toBe(2000)
     expect(config.loreMaxEntries).toBe(1)
-    expect(config.loreMaxChars).toBe(40_000)
+    expect(config.loreMaxChars).toBe(400_000)
     expect(config.playerInputMax).toBe(200)
   })
 
@@ -59,10 +61,10 @@ describe('agent config validation', () => {
     ['maxSpeechesPerBeat', 0],
     ['maxSpeechesPerBeat', 7],
     ['stageWindow', 3],
-    ['loreScanLines', 201],
+    ['loreScanLines', 2001],
     ['loreMaxEntries', 0],
     ['loreMaxChars', 199],
-    ['playerInputMax', 20_001],
+    ['playerInputMax', 120_001],
   ] as const)('rejects %s = %i', (field, value) => {
     expect(() => normalizeAgentConfig({ [field]: value })).toThrow(AgentConfigInvalidError)
   })
@@ -186,5 +188,69 @@ describe('reply budgets', () => {
     expect(normalizeAgentConfig({ reasoningReserveTokens: 1024 }).reasoningReserveTokens).toBe(1024)
     expect(normalizeAgentConfig({}).reasoningReserveTokens).toBeUndefined()
     expect(() => normalizeAgentConfig({ reasoningReserveTokens: -1 })).toThrow(AgentConfigInvalidError)
+  })
+})
+
+describe('context budget presets', () => {
+  it('ships a preset matching the old defaults', () => {
+    expect(contextPresetOf(defaultAgentConfig())).toBe('compact')
+  })
+
+  it('recognizes every preset it offers', () => {
+    for (const [id, preset] of Object.entries(CONTEXT_PRESETS)) {
+      const config = normalizeAgentConfig({ ...preset, label: undefined })
+      expect(contextPresetOf(config)).toBe(id)
+    }
+  })
+
+  it('reports a custom mix as no preset', () => {
+    const config = normalizeAgentConfig({ ...CONTEXT_PRESETS.roomy, loreMaxChars: 12_345 })
+    expect(contextPresetOf(config)).toBeUndefined()
+  })
+
+  it('keeps the presets inside the enforced ceilings', () => {
+    const rows = ['stageWindow', 'loreScanLines', 'loreMaxEntries', 'loreMaxChars', 'playerInputMax'] as const
+    for (const preset of Object.values(CONTEXT_PRESETS)) {
+      for (const row of rows) {
+        const bounds = AGENT_CONFIG_LIMITS[row]
+        expect(preset[row]).toBeGreaterThanOrEqual(bounds.min)
+        expect(preset[row]).toBeLessThanOrEqual(bounds.max)
+      }
+    }
+  })
+
+  it('lets the largest preset hold a 1M-context-sized transcript', () => {
+    // The point of raising the ceilings: a 1M window can carry far more than the
+    // old 200-line / 40k-char limits.
+    const extreme = CONTEXT_PRESETS.extreme
+    expect(extreme.stageWindow).toBeGreaterThan(AGENT_CONFIG_LIMITS.stageWindow.min * 100)
+    expect(extreme.loreMaxChars * 0.6).toBeLessThan(1_000_000)
+  })
+})
+
+describe('tailWithinChars', () => {
+  const line = (text: string): { text: string } => ({ text })
+
+  it('keeps everything that fits', () => {
+    expect(tailWithinChars([line('aaa'), line('bb')], 10, 100)).toHaveLength(2)
+  })
+
+  it('applies the line budget first', () => {
+    expect(tailWithinChars([line('a1'), line('b2'), line('c3')], 2, undefined)).toEqual([line('b2'), line('c3')])
+  })
+
+  it('trims from the oldest end until the character budget fits', () => {
+    const kept = tailWithinChars([line('1'), line('2'), line('3'), line('4')], 10, 2)
+    expect(kept).toEqual([line('3'), line('4')])
+  })
+
+  it('always keeps the newest line even when it alone exceeds the budget', () => {
+    // An empty transcript would hide the turn that just happened.
+    expect(tailWithinChars([line('old'), line('x'.repeat(50))], 10, 10)).toEqual([line('x'.repeat(50))])
+  })
+
+  it('treats an absent budget as no character limit', () => {
+    const lines = [line('a'), line('b'), line('c')]
+    expect(tailWithinChars(lines, 10, undefined)).toEqual(lines)
   })
 })
