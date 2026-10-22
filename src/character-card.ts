@@ -224,6 +224,52 @@ export function parseCharacterCard(text: string, path: string): CharacterCard {
   })
 }
 
+/**
+ * Parse an imported card as a new card owned by the target workspace.
+ *
+ * An exported `.charc` carries its original id and timestamps; importing keeps
+ * the content but mints a fresh id, so importing into the workspace a card came
+ * from creates a copy instead of colliding with or overwriting the original.
+ * @param text - file content.
+ * @param path - file path for diagnostics.
+ * @returns the card to store.
+ */
+export function parseCharacterCardImport(text: string, path: string): CharacterCard {
+  if (text.length > CHARACTER_CARD_MAX_BYTES) {
+    throw new CharacterCardInvalidError('角色卡文件过大', path)
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new CharacterCardInvalidError('角色卡不是合法 JSON', path)
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new CharacterCardInvalidError('角色卡必须是 JSON 对象', path)
+  }
+  const record = value as Record<string, unknown>
+  if (record.kind !== undefined && record.kind !== CHARACTER_KIND) {
+    throw new CharacterCardInvalidError(`不是酒馆角色卡（kind=${String(record.kind)}）`, path)
+  }
+  if (typeof record.schema === 'number' && record.schema > CHARACTER_SCHEMA) {
+    throw new CharacterCardInvalidError(`角色卡 schema ${String(record.schema)} 高于支持版本`, path)
+  }
+  const now = new Date().toISOString()
+  return buildCharacterCard(randomUUID(), record, { createdAt: now, updatedAt: now })
+}
+
+/**
+ * Render one card as a portable `.charc` document.
+ *
+ * Byte-for-byte the format {@link writeCard} stores, so an exported file can be
+ * re-imported without a conversion step.
+ * @param card - stored card.
+ * @returns the JSON text to download.
+ */
+export function exportCharacterCardText(card: CharacterCard): string {
+  return `${JSON.stringify(card, null, 2)}\n`
+}
+
 /** One unreadable card found during a directory scan. */
 export interface CharacterCardProblem {
   readonly file: string
@@ -319,8 +365,7 @@ export async function readCharacterCard(workspaceDir: string, id: string): Promi
   }
 }
 
-async function writeCard(workspaceDir: string, card: CharacterCard): Promise<void> {
-  const directory = charactersDirectory(workspaceDir)
+async function writeCard(workspaceDir: string, card: CharacterCard): Promise<void> {  const directory = charactersDirectory(workspaceDir)
   await mkdir(directory, { recursive: true })
   const text = `${JSON.stringify(card, null, 2)}\n`
   if (text.length > CHARACTER_CARD_MAX_BYTES) throw new CharacterCardInvalidError('角色卡文件过大')
@@ -333,6 +378,15 @@ async function writeCard(workspaceDir: string, card: CharacterCard): Promise<voi
     await unlink(temporary).catch(() => undefined)
     throw error
   }
+}
+
+/**
+ * Persist one already-validated card.
+ * @param workspaceDir - tavern workspace root.
+ * @param card - card to store; its id names the file.
+ */
+export async function writeCharacterCard(workspaceDir: string, card: CharacterCard): Promise<void> {
+  await writeCard(workspaceDir, card)
 }
 
 /**

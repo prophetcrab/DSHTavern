@@ -1,5 +1,7 @@
 # DSHTavern 文档
 
+架构与开发进度见 [architecture.md](architecture.md)；它是唯一事实来源，随每次改动更新。
+
 ## 两类文档
 
 | 类型 | 目录 | 回答的问题 | 写法 |

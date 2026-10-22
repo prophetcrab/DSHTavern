@@ -19,6 +19,10 @@
       "types": "./lib/types/session.d.ts",
       "default": "./lib/session.js"
     },
+    "./stats": {
+      "types": "./lib/types/stats/index.d.ts",
+      "default": "./lib/stats/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -61,6 +65,7 @@
     "@deepseek-ai/dsh-client-ui-slots": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.2",
     "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
     "@deepseek-ai/dsh-workspace": "^0.2.1-rc.2",

@@ -8,6 +8,7 @@
  */
 import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
+import { fetchCharacterCards } from './characters.js'
 import { CLASS } from './styles.js'
 
 /** Where a system-prompt block's content comes from. */
@@ -227,12 +228,18 @@ export interface PromptCardProps {
  */
 export function PromptCardView(props: PromptCardProps): ReactElement {
   const block = props.block
-  const className = props.dragging ? CLASS.promptCardDragging : props.over ? CLASS.promptCardOver : CLASS.promptCard
+  const className = [
+    CLASS.promptCard,
+    props.dragging ? 'dshtavern-prompt-card-dragging' : '',
+    props.over ? 'dshtavern-prompt-card-over' : '',
+    block.enabled ? '' : 'dshtavern-prompt-card-off',
+  ].filter(part => part.length > 0).join(' ')
   const canEdit = block.editable && !props.disabled
   return createElement('div', {
     key: block.id,
     className,
     'data-source': block.source,
+    'data-enabled': block.enabled,
     draggable: true,
     'aria-grabbed': props.dragging,
     onClick: canEdit ? props.onOpen : undefined,
@@ -256,17 +263,35 @@ export function PromptCardView(props: PromptCardProps): ReactElement {
   createElement('span', { key: 'handle', className: CLASS.dragHandle, 'aria-hidden': true }, '⠿'),
   createElement('span', { key: 'index', className: CLASS.promptIndex }, String(props.index + 1)),
   createElement('div', { key: 'main', className: CLASS.promptMain },
-    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
+    createElement('div', { key: 'title', className: 'dshtavern-prompt-title' },
       createElement('span', { className: CLASS.promptName }, block.label),
       createElement('span', { className: CLASS.badge, 'data-source': block.source },
         SOURCE_LABELS[block.source]),
+      block.enabled
+        ? null
+        : createElement('span', { key: 'off', className: 'dshtavern-pill', 'data-tone': 'muted' }, '已停用'),
       block.overridden
-        ? createElement('span', { className: 'dshtavern-pill', 'data-tone': 'ok' }, '已修改')
-        : null,
-      canEdit
-        ? createElement('span', { className: 'dshtavern-prompt-edit-hint' }, '点击编辑')
+        ? createElement('span', { key: 'mod', className: 'dshtavern-pill', 'data-tone': 'ok' }, '已修改')
         : null),
-    createElement('div', { className: CLASS.hint }, block.description)),
+    createElement('div', { key: 'hint', className: CLASS.hint }, block.description)),
+  createElement('div', { key: 'side', className: 'dshtavern-prompt-side' },
+    createElement('span', {
+      key: 'chars',
+      className: 'dshtavern-prompt-chars',
+      title: '这个块进入提示词的字数；运行时块在装配时才能确定',
+    }, promptSizeLabel(block)),
+    canEdit
+      ? createElement('button', {
+        key: 'edit',
+        type: 'button',
+        className: 'dshtavern-prompt-edit',
+        'aria-label': `编辑 ${block.label}`,
+        onClick: (event: { stopPropagation(): void }) => {
+          event.stopPropagation()
+          props.onOpen()
+        },
+      }, '编辑')
+      : null),
   createElement('label', {
     key: 'switch',
     className: 'dshtavern-switch',
@@ -282,6 +307,22 @@ export function PromptCardView(props: PromptCardProps): ReactElement {
   createElement('span', { className: 'dshtavern-switch-track', 'aria-hidden': true },
     createElement('span', { className: 'dshtavern-switch-thumb' }))))
 }
+
+/**
+ * Character cost of one block, as shown on its card.
+ *
+ * Card-sourced and runtime blocks carry no stored text: their content is filled
+ * while a request is assembled, so a character count would be a lie.
+ * @param block - the block to measure.
+ * @returns a compact size label.
+ */
+export function promptSizeLabel(block: PromptBlockView): string {
+  const chars = block.content.trim().length
+  if (chars === 0) return '运行时'
+  if (chars < 1000) return `${chars} 字`
+  return `${(chars / 1000).toFixed(1)}k 字`
+}
+
 
 /** Props of the prompt-block edit dialog. */
 export interface PromptEditorDialogProps {
@@ -388,6 +429,27 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
   const [preview, setPreview] = useState<PromptPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  // The picker lists the workspace's real cards. Reading them from the preview
+  // response would leave only a placeholder until the first preview ran.
+  const [previewCards, setPreviewCards] = useState<readonly { id: string; name: string }[]>([])
+  const [cardsError, setCardsError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!previewOpen || scope !== 'character') return
+    let cancelled = false
+    fetchCharacterCards(props.workspaceId).then(cards => {
+      if (cancelled) return
+      setPreviewCards(cards.map(card => ({ id: card.id, name: card.name })))
+      setCardsError(null)
+      setPreviewCardId(current => current !== undefined && cards.some(card => card.id === current)
+        ? current
+        : cards[0]?.id)
+    }).catch(cause => {
+      if (cancelled) return
+      setCardsError(errorText(cause))
+    })
+    return () => { cancelled = true }
+  }, [previewOpen, props.workspaceId, scope])
 
   const runPreview = useCallback(async () => {
     setPreviewLoading(true)
@@ -548,17 +610,24 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
     scope === 'character'
       ? createElement('label', { className: 'dshtavern-wb-field' },
         createElement('span', { className: 'dshtavern-wb-label' }, '角色卡'),
-        createElement('select', {
-          className: 'dshtavern-wb-input',
-          value: previewCardId ?? '',
-          onChange: (event: { target: { value: string } }) => {
-            setPreviewCardId(event.target.value === '' ? undefined : event.target.value)
-            setPreview(null)
+        previewCards.length === 0
+          ? createElement('select', {
+            className: 'dshtavern-wb-input',
+            disabled: true,
+          }, createElement('option', { value: '' }, cardsError === null ? '（没有角色卡）' : '（读取失败）'))
+          : createElement('select', {
+            className: 'dshtavern-wb-input',
+            value: previewCardId ?? '',
+            onChange: (event: { target: { value: string } }) => {
+              setPreviewCardId(event.target.value === '' ? undefined : event.target.value)
+              setPreview(null)
+            },
           },
-        },
-        createElement('option', { value: '' }, '（第一张卡）'),
-        (preview?.cards ?? []).map(card =>
-          createElement('option', { key: card.id, value: card.id }, card.name))))
+          ...previewCards.map(card =>
+            createElement('option', { key: card.id, value: card.id }, card.name))),
+        cardsError === null
+          ? null
+          : createElement('span', { className: 'dshtavern-wb-hint' }, cardsError))
       : null,
     createElement('label', { className: 'dshtavern-wb-field dshtavern-preview-sample' },
       createElement('span', { className: 'dshtavern-wb-label' }, '测试台词（用于触发世界书）'),

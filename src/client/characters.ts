@@ -95,6 +95,19 @@ async function loadCards(workspaceId: string): Promise<{ cards: CharacterCardVie
   }
 }
 
+/**
+ * Read one workspace's character cards for another panel.
+ *
+ * The prompt-preview picker needs the real card names before a preview exists;
+ * reading them through the preview response would leave the picker empty until
+ * the first preview runs.
+ * @param workspaceId - tavern workspace id.
+ * @returns readable cards, newest first.
+ */
+export async function fetchCharacterCards(workspaceId: string): Promise<CharacterCardView[]> {
+  return (await loadCards(workspaceId)).cards
+}
+
 async function writeCard(
   workspaceId: string,
   action: 'create' | 'save',
@@ -133,6 +146,88 @@ async function removeCard(workspaceId: string, id: string): Promise<void> {
     body: JSON.stringify({ workspaceId, action: 'delete', id }),
   })
   await readJson(response)
+}
+
+/** One exported document: suggested file name plus its text. */
+export interface TransferDocument {
+  readonly file: string
+  readonly text: string
+}
+
+/**
+ * Ask the host for one card's `.charc` document.
+ * @param workspaceId - tavern workspace id.
+ * @param id - card id.
+ * @returns the suggested file name and document text.
+ */
+export async function exportCharacterCard(workspaceId: string, id: string): Promise<TransferDocument> {
+  const response = await fetch(
+    `/tavern/characters/transfer?workspaceId=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(id)}`,
+    { headers: { accept: 'application/json' }, cache: 'no-store' },
+  )
+  const body = await readJson(response)
+  return { file: String(body.file), text: String(body.text) }
+}
+
+/**
+ * Import one `.charc` document into the workspace.
+ * @param workspaceId - tavern workspace id.
+ * @param text - document text.
+ * @returns the stored card.
+ */
+export async function importCharacterCard(workspaceId: string, text: string): Promise<CharacterCardView> {
+  const response = await fetch('/tavern/characters/transfer', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ workspaceId, text }),
+  })
+  const body = await readJson(response)
+  if (typeof body.card !== 'object' || body.card === null) throw new Error('服务端没有返回角色卡')
+  return body.card as CharacterCardView
+}
+
+/**
+ * Save one document to the user's disk.
+ *
+ * The client owns the download because the host cannot reach the browser's
+ * save dialog; the text is produced by the host so both sides read one format.
+ * @param transfer - suggested file name and content.
+ */
+export function downloadDocument(transfer: TransferDocument): void {
+  const blob = new Blob([transfer.text], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = transfer.file
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  // Revoking immediately can cancel the download in some browsers.
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/**
+ * Ask the user to pick one file and read it as text.
+ * @param accept - file input accept filter.
+ * @returns the file name and text, or `undefined` when the picker was dismissed.
+ */
+export async function pickTextFile(accept: string): Promise<{ name: string; text: string } | undefined> {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = accept
+  input.style.display = 'none'
+  document.body.appendChild(input)
+  try {
+    const file = await new Promise<File | undefined>((resolve) => {
+      input.addEventListener('change', () => resolve(input.files?.[0]), { once: true })
+      input.addEventListener('cancel', () => resolve(undefined), { once: true })
+      input.click()
+    })
+    if (file === undefined) return undefined
+    return { name: file.name, text: await file.text() }
+  } finally {
+    input.remove()
+  }
 }
 
 function draftOf(card: CharacterCardView): CharacterDraft {
@@ -234,6 +329,35 @@ export function CharacterCardTool(props: CharacterCardToolProps): ReactElement {
     }
   }, [confirmDelete, props.workspaceId, reload])
 
+  const importCard = useCallback(async () => {
+    setState(prev => ({ ...prev, error: null, notice: null }))
+    let picked: { name: string; text: string } | undefined
+    try {
+      picked = await pickTextFile('.charc,application/json')
+    } catch (cause) {
+      setState(prev => ({ ...prev, error: errorText(cause) }))
+      return
+    }
+    if (picked === undefined) return
+    setState(prev => ({ ...prev, saving: true }))
+    try {
+      const card = await importCharacterCard(props.workspaceId, picked.text)
+      await reload(`已导入角色卡「${card.name}」`)
+    } catch (cause) {
+      setState(prev => ({ ...prev, saving: false, error: errorText(cause) }))
+    }
+  }, [props.workspaceId, reload])
+
+  const exportCard = useCallback(async (id: string) => {
+    setState(prev => ({ ...prev, error: null, notice: null }))
+    try {
+      downloadDocument(await exportCharacterCard(props.workspaceId, id))
+      setState(prev => ({ ...prev, notice: '已导出角色卡' }))
+    } catch (cause) {
+      setState(prev => ({ ...prev, error: errorText(cause) }))
+    }
+  }, [props.workspaceId])
+
   const update = (patch: Partial<CharacterDraft>): void => {
     setDraft(current => current === null ? null : { ...current, ...patch })
   }
@@ -244,13 +368,22 @@ export function CharacterCardTool(props: CharacterCardToolProps): ReactElement {
   return createElement('section', { className: 'dshtavern-character-panel' },
     createElement('aside', { className: 'dshtavern-character-sidebar' },
       createElement('div', { className: 'dshtavern-character-side-head' },
-        createElement('span', { className: 'dshtavern-character-heading' }, '角色卡'),
-        createElement('span', { className: 'dshtavern-character-count' }, String(state.cards.length)),
-        createElement('button', {
-          type: 'button',
-          className: 'dshtavern-button dshtavern-button-primary dshtavern-character-new',
-          onClick: () => { setDraft(NEW_DRAFT); setConfirmDelete(null) },
-        }, '新建')),
+        createElement('div', { className: 'dshtavern-character-side-title' },
+          createElement('span', { className: 'dshtavern-character-heading' }, '角色卡'),
+          createElement('span', { className: 'dshtavern-character-count' }, String(state.cards.length))),
+        createElement('div', { className: 'dshtavern-character-side-actions' },
+          createElement('button', {
+            type: 'button',
+            className: 'dshtavern-button dshtavern-character-new',
+            disabled: state.saving,
+            title: '从 .charc 文件导入角色卡',
+            onClick: () => { void importCard() },
+          }, '导入'),
+          createElement('button', {
+            type: 'button',
+            className: 'dshtavern-button dshtavern-button-primary dshtavern-character-new',
+            onClick: () => { setDraft(NEW_DRAFT); setConfirmDelete(null) },
+          }, '新建'))),
       createElement('div', { className: 'dshtavern-character-list' },
         state.loading
           ? createElement('div', { className: 'dshtavern-character-empty' }, '加载中…')
@@ -314,6 +447,15 @@ export function CharacterCardTool(props: CharacterCardToolProps): ReactElement {
                 className: 'dshtavern-button',
                 onClick: () => { setDraft(null); setConfirmDelete(null) },
               }, '关闭'),
+              draft.id === null
+                ? null
+                : createElement('button', {
+                  type: 'button',
+                  className: 'dshtavern-button',
+                  disabled: state.saving,
+                  title: '导出为 .charc 文件',
+                  onClick: () => { void exportCard(draft.id!) },
+                }, '导出'),
               draft.id === null
                 ? null
                 : createElement('button', {

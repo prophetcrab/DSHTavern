@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/index.ts", "src/session.ts"]
+  "include": ["src/index.ts", "src/session.ts", "src/stats/index.ts"]
 }

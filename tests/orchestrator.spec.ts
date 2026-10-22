@@ -71,6 +71,44 @@ describe('director reply parsing', () => {
     expect(decision.nextSpeaker).toBeUndefined()
   })
 
+  it('splits a transcript-shaped prose reply into narration and a speaker', () => {
+    const decision = parseDirectorReply([
+      '[旁白] 顶灯闪了一下才稳住。',
+      '[月见] *她把伞收起*',
+      '',
+      '别站在雨里。',
+    ].join('\n'))
+    expect(decision.narration).toBe('顶灯闪了一下才稳住。')
+    expect(decision.narration).not.toContain('别站在雨里')
+    expect(decision.nextSpeaker).toBe('月见')
+  })
+
+  it('strips narration tags when the director tags several lines', () => {
+    const decision = parseDirectorReply('[旁白] 雨更大了。\n[旁白] 灯灭了一盏。')
+    expect(decision.narration).toBe('雨更大了。\n灯灭了一盏。')
+    expect(decision.nextSpeaker).toBeUndefined()
+  })
+
+  it('recovers a speaker embedded in the JSON narration field', () => {
+    const decision = parseDirectorReply(JSON.stringify({
+      narration: '[旁白] 车厢后部有人合上了包。\n[月见] 那晚的单子呢？',
+      inner: '月见在试探。',
+      nextSpeaker: null,
+    }))
+    expect(decision.narration).toBe('车厢后部有人合上了包。')
+    expect(decision.nextSpeaker).toBe('月见')
+    expect(decision.inner).toBe('月见在试探。')
+  })
+
+  it('keeps an explicit speaker over a tag in the narration', () => {
+    const decision = parseDirectorReply(JSON.stringify({
+      narration: '[旁白] 风停了。\n[月见] 走吧。',
+      nextSpeaker: 'card-00000001',
+    }))
+    expect(decision.narration).toBe('风停了。')
+    expect(decision.nextSpeaker).toBe('card-00000001')
+  })
+
   it('resolves a speaker given by name as well as by id', () => {
     const cast = [{ id: 'card-00000001', name: '月见', brief: '魔法少女' }]
     expect(resolveSpeaker({ narration: '', inner: '', nextSpeaker: 'card-00000001' }, cast)?.name).toBe('月见')

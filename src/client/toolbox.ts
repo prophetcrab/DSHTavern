@@ -16,6 +16,7 @@ import { PANEL_CSS, STORY_CSS, TOOLBOX_CSS } from './styles.js'
 import { PromptOrchestration } from './prompt.js'
 import { CharacterCardTool } from './characters.js'
 import { WorldbookWorkbench } from './worldbook.js'
+import { UsagePanel } from './stats.js'
 
 /** One registered tavern workspace, as served by `/tavern/state`. */
 export interface TavernWorkspaceRef {
@@ -33,7 +34,7 @@ export interface TavernToolboxStation {
 }
 
 /** Tool identities shown by the toolbox. */
-export type TavernToolId = 'prompt' | 'characters' | 'worldbooks' | 'settings'
+export type TavernToolId = 'prompt' | 'characters' | 'worldbooks' | 'usage' | 'settings'
 
 /** Launcher position in viewport pixels (top-left corner). */
 export interface FabPosition {
@@ -299,6 +300,7 @@ const TOOLS: readonly ToolEntry[] = [
   { id: 'prompt', glyph: '编', label: '提示词编排', enabled: true },
   { id: 'characters', glyph: '卡', label: '角色卡', enabled: true },
   { id: 'worldbooks', glyph: '书', label: '世界书', enabled: true },
+  { id: 'usage', glyph: '量', label: '用量统计', enabled: true },
   { id: 'settings', glyph: '设', label: '设置', enabled: false },
 ]
 
@@ -398,7 +400,14 @@ function ToolWindow(): ReactElement | null {
             workspaceTitle: station.workspaceTitle,
             workspacePath: station.workspacePath,
           })
-          : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
+          : tool === 'usage'
+            ? createElement(UsagePanel, {
+              workspaceId: station.workspaceId,
+              workspaceTitle: station.workspaceTitle,
+              workspacePath: station.workspacePath,
+              sessionId: station.sessionId,
+            })
+            : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
 }
 
 /**

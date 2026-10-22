@@ -9,6 +9,12 @@
 - insert:
     - id: dshtavern
       name: dshtavern
+# Usage statistics live in their own row so the feature can be removed or
+# disabled without touching the tavern plugin: removing this line unregisters
+# `/tavern-stats/*` and the toolbox entry reports the feature as unavailable.
+- insert:
+    - id: dshtavern-stats
+      name: 'dshtavern/stats'
 - insert:
     - id: preset-tavern
       name: '@deepseek-ai/dsh-agent-preset'

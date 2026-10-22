@@ -77,9 +77,29 @@ describe('prompt card', () => {
     expect(renderCard()).toContain('"className":"dshtavern-prompt-card"')
   })
 
+  it('marks a disabled block visually and in data', () => {
+    const card = renderCard({ block: { ...block, enabled: false } })
+    expect(card).toContain('dshtavern-prompt-card-off')
+    expect(card).toContain('"data-enabled":false')
+    expect(card).toContain('已停用')
+    expect(renderCard()).not.toContain('已停用')
+  })
+
+  it('shows the text size and an edit button for editable blocks', () => {
+    expect(renderCard()).toContain('6 字')
+    expect(renderCard()).toContain('dshtavern-prompt-edit')
+    expect(renderCard({ block: { ...block, editable: false } })).not.toContain('dshtavern-prompt-edit')
+  })
+
+  it('labels a runtime-filled block instead of showing a false size', () => {
+    const card = renderCard({ block: { ...block, content: '' } })
+    expect(card).toContain('运行时')
+    expect(card).not.toContain('0 字')
+  })
+
   it('opens a separate edit dialog for editable blocks', () => {
-    expect(renderCard()).toContain('点击编辑')
-    expect(renderCard({ block: { ...block, editable: false } })).not.toContain('点击编辑')
+    expect(renderCard()).toContain('编辑')
+    expect(renderCard({ block: { ...block, editable: false } })).not.toContain('dshtavern-prompt-edit')
     const dialog = renderEditor()
     expect(dialog).toContain('dshtavern-editor-layer')
     expect(dialog).toContain('dshtavern-editor-textarea')

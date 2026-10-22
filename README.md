@@ -2,6 +2,7 @@
 
 用 DeepSeek Harness 的插件机制实现一个 SillyTavern 式的酒馆。
 
+- 架构与开发进度（唯一事实来源，随改动更新）：[docs/architecture.md](docs/architecture.md)
 - 决策文档（为什么这样设计）：[docs/decisions/](docs/decisions/)
 - 设计文档（准备采用的方案）：[docs/design/](docs/design/)
 

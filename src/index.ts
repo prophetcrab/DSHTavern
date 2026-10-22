@@ -17,7 +17,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -27,9 +27,13 @@ import {
   CharacterCardInvalidError,
   createCharacterCard,
   deleteCharacterCard,
+  exportCharacterCardText,
   listCharacterCards,
   listCharacterCardsSync,
+  parseCharacterCardImport,
+  readCharacterCard,
   saveCharacterCard,
+  writeCharacterCard,
 } from './character-card.js'
 import type { CharacterCard, CharacterCardInput, CharacterCardListing } from './character-card.js'
 import {
@@ -50,6 +54,8 @@ import type { BeatRecord, BeatSegment, CastMember, DirectorDecision } from './or
 import { appendStage, readStage, readWorld, storyDirectory, writeWorld } from './stage.js'
 import {
   WorldbookInvalidError,
+  exportWorldbookText,
+  parseWorldbookImport,
   readWorldbook,
   writeWorldbook,
 } from './worldbook.js'
@@ -74,6 +80,9 @@ export const TAVERN_DIRECTORY = '.dshtavern'
 
 /** Per-agent complete prompt section registered by the host assembly. */
 export const TAVERN_PROMPT_SECTION = 'tavern:workspace-prompt'
+
+/** Reply text shown when a beat produced neither narration nor speech. */
+export const EMPTY_BEAT_NOTICE = '这一幕模型没有返回内容。可以再说一句，或检查提示词编排里的导演块是否被停用。'
 
 /** Marker file name inside {@link TAVERN_DIRECTORY}. */
 export const MARKER_FILE = 'tavern.json'
@@ -743,6 +752,59 @@ export class TavernWorkspaceService extends Service {
   }
 
   /**
+   * Render one stored card as a downloadable `.charc` document.
+   * @param workspaceId - registered tavern workspace id.
+   * @param id - card id.
+   * @returns the suggested file name and the document text.
+   * @throws CharacterCardInvalidError when the card is absent.
+   */
+  async exportCharacterCard(workspaceId: string, id: string): Promise<{ file: string; text: string }> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const card = await readCharacterCard(workspace.path, id)
+    if (card === undefined) throw new CharacterCardInvalidError('角色卡不存在')
+    return { file: `${safeFileName(card.name)}.charc`, text: exportCharacterCardText(card) }
+  }
+
+  /**
+   * Import one `.charc` document into a workspace as a new card.
+   * @param workspaceId - registered tavern workspace id.
+   * @param text - uploaded document.
+   * @returns the stored card.
+   */
+  async importCharacterCard(workspaceId: string, text: string): Promise<CharacterCard> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const card = parseCharacterCardImport(text, '<import>')
+    await writeCharacterCard(workspace.path, card)
+    return card
+  }
+
+  /**
+   * Render one workspace's worldbook as a downloadable `.world` document.
+   * @param workspaceId - registered tavern workspace id.
+   * @returns the suggested file name and the document text.
+   */
+  async exportWorldbook(workspaceId: string): Promise<{ file: string; text: string }> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const book = await readWorldbook(workspace.path)
+    return {
+      file: `${safeFileName(workspace.title)}.world`,
+      text: exportWorldbookText(book, workspace.title),
+    }
+  }
+
+  /**
+   * Replace one workspace's worldbook from a `.world` document.
+   * @param workspaceId - registered tavern workspace id.
+   * @param text - uploaded document.
+   * @returns the stored book.
+   */
+  async importWorldbook(workspaceId: string, text: string): Promise<WorldbookFile> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    const entries = parseWorldbookImport(text, '<import>')
+    return writeWorldbook(workspace.path, entries)
+  }
+
+  /**
    * Assemble a directory's workspace-level system prompt text (D005).
    *
    * The session-side preset row calls this with the session cwd: it resolves
@@ -890,6 +952,9 @@ export class TavernWorkspaceService extends Service {
     const spoken: CastMember[] = []
     const turns: BeatTurn[] = []
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
+    // Sum of every model call this beat made. The orchestrator stands in for the
+    // loop's own call, so it owns forwarding usage back to the loop.
+    const beatUsage = emptyUsage()
     // The beat runs until the director stops naming a speaker, a character has
     // nothing to add, or the cap is reached. Each turn is a fresh director call
     // over the stage as extended by the previous one.
@@ -904,11 +969,13 @@ export class TavernWorkspaceService extends Service {
           world, cast, stage, layout: directorLayout,
           worldbook: workspaceBook.entries, playerInput,
         }, spoken)
-      const directorReply = await this.complete(options, directorSystem, [
+      const directorResult = await this.complete(options, directorSystem, [
         { role: 'user', text: turn === 0
           ? playerInput.length === 0 ? '（玩家保持了沉默）' : playerInput
           : '（继续这一幕。）' },
       ])
+      addUsage(beatUsage, directorResult.usage)
+      const directorReply = directorResult.text
       const decision = parseDirectorReply(directorReply)
       const speaker = resolveSpeaker(decision, cast)
       if (turn === 0) inner = decision.inner
@@ -944,9 +1011,11 @@ export class TavernWorkspaceService extends Service {
         narration: decision.narration,
       })
       const characterMessage = buildCharacterMessage(decision.narration, playerInput)
-      const speech = (await this.complete(options, characterSystem, [
+      const characterResult = await this.complete(options, characterSystem, [
         { role: 'user', text: characterMessage },
-      ])).trim()
+      ])
+      addUsage(beatUsage, characterResult.usage)
+      const speech = characterResult.text.trim()
       turnRecord.characterSystem = characterSystem
       turnRecord.characterPromptMessages = [{ role: 'user', text: characterMessage }]
       turnRecord.speech = speech
@@ -989,21 +1058,30 @@ export class TavernWorkspaceService extends Service {
       turns,
     }, story)
 
-    yield* textReply(options, renderBeatMarkdown(segments))
+    // An empty beat means every model call returned nothing (or the director
+    // produced no narration and named no speaker). Reporting that beats a blank
+    // message the player cannot tell apart from a rendering failure.
+    const rendered = renderBeatMarkdown(segments)
+    yield* textReply(options, rendered.length > 0 ? rendered : EMPTY_BEAT_NOTICE, beatUsage)
   }
 
   /**
-   * Run one auxiliary completion to a finished string.
+   * Run one auxiliary completion to a finished string plus its reported usage.
+   *
+   * The orchestrator replaces the agent loop's own model call, so adapter usage
+   * chunks would otherwise be dropped before reaching the loop: the loop would
+   * record an assistant message with no usage, and the token-meter projection
+   * would report zero for every tavern session.
    * @param options - the intercepted request, providing provider and model.
    * @param system - system prompt for this call.
    * @param messages - user turns.
-   * @returns the concatenated text output.
+   * @returns the concatenated text output and the call's usage, when reported.
    */
   private async complete(
     options: GenerateOptions,
     system: string,
     messages: readonly { role: 'user'; text: string }[],
-  ): Promise<string> {
+  ): Promise<{ text: string; usage?: TokenUsage }> {
     const stream = this.ctx.llm.stream({
       provider: options.provider,
       model: options.model,
@@ -1015,13 +1093,15 @@ export class TavernWorkspaceService extends Service {
       ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
     })
     let text = ''
+    let usage: TokenUsage | undefined
     for await (const chunk of stream) {
       if (chunk.type === 'text-delta') text += chunk.text
+      else if (chunk.type === 'usage') usage = chunk.usage
       else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
         throw new Error(`tavern model call failed: ${chunk.reason.failure.message}`)
       }
     }
-    return text
+    return usage === undefined ? { text } : { text, usage }
   }
 
   /** Persist one beat's prompts and outcome for inspection. */
@@ -1229,6 +1309,16 @@ export class TavernWorkspaceService extends Service {
       }), 'dshtavern: /tavern/worldbook')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
+        path: '/tavern/characters/transfer',
+        handler: (req, res) => this.handleCharacterTransfer(req, res),
+      }), 'dshtavern: /tavern/characters/transfer')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: '/tavern/worldbook/transfer',
+        handler: (req, res) => this.handleWorldbookTransfer(req, res),
+      }), 'dshtavern: /tavern/worldbook/transfer')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
         path: '/tavern/preview',
         handler: (req, res) => this.handlePreview(req, res),
       }), 'dshtavern: /tavern/preview')
@@ -1371,6 +1461,60 @@ export class TavernWorkspaceService extends Service {
       }
       if (id === undefined) throw new CharacterCardInvalidError('缺少角色卡 id')
       sendJson(res, 200, { ok: true, card: await this.saveCharacterCard(workspaceId, id, input) })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
+  /** Import or export one character card as a `.charc` document. */
+  private async handleCharacterTransfer(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    try {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const method = req.method ?? 'GET'
+      if (method === 'GET') {
+        const workspaceId = workspaceIdFromUrl(req)
+        const id = url.searchParams.get('id') ?? ''
+        if (id.length === 0) throw new CharacterCardInvalidError('缺少角色卡 id')
+        sendJson(res, 200, { ok: true, ...await this.exportCharacterCard(workspaceId, id) })
+        return
+      }
+      if (method !== 'POST') {
+        res.setHeader('allow', 'GET, POST')
+        sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
+        return
+      }
+      const body = await readJsonObject(req)
+      const workspaceId = optionalString(body, 'workspaceId')
+      if (workspaceId === undefined) throw new CharacterCardInvalidError('缺少 workspaceId')
+      const text = optionalString(body, 'text')
+      if (text === undefined) throw new CharacterCardInvalidError('缺少上传内容')
+      sendJson(res, 200, { ok: true, card: await this.importCharacterCard(workspaceId, text) })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
+  /** Import or export one workspace's worldbook as a `.world` document. */
+  private async handleWorldbookTransfer(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    try {
+      const method = req.method ?? 'GET'
+      if (method === 'GET') {
+        sendJson(res, 200, { ok: true, ...await this.exportWorldbook(workspaceIdFromUrl(req)) })
+        return
+      }
+      if (method !== 'POST') {
+        res.setHeader('allow', 'GET, POST')
+        sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
+        return
+      }
+      const body = await readJsonObject(req)
+      const workspaceId = optionalString(body, 'workspaceId')
+      if (workspaceId === undefined) throw new WorldbookInvalidError('缺少 workspaceId')
+      const text = optionalString(body, 'text')
+      if (text === undefined) throw new WorldbookInvalidError('缺少上传内容')
+      sendJson(res, 200, { ok: true, ...await this.importWorldbook(workspaceId, text) })
     } catch (error) {
       this.fail(res, error)
     }
@@ -1606,17 +1750,60 @@ async function* emptyReply(): AsyncGenerator<StreamChunk> {
   yield { type: 'finish', reason: { kind: 'stop' } }
 }
 
+/** @returns a usage accumulator seeded with four empty buckets. */
+function emptyUsage(): TokenUsage {
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+}
+
+/**
+ * Fold one call's reported usage into the beat total.
+ *
+ * Buckets are disjoint, so a plain field-wise sum is the billed total. Calls
+ * whose provider reported nothing leave the accumulator untouched.
+ * @param target - accumulator mutated in place.
+ * @param usage - usage from one call, when reported.
+ */
+function addUsage(target: TokenUsage, usage: TokenUsage | undefined): void {
+  if (usage === undefined) return
+  target.inputTokens += usage.inputTokens
+  target.outputTokens += usage.outputTokens
+  target.cacheReadTokens = (target.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0)
+  target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+  if (usage.reasoningTokens !== undefined) {
+    target.reasoningTokens = (target.reasoningTokens ?? 0) + usage.reasoningTokens
+  }
+}
+
 /**
  * Build a single-text-block reply stream.
+ *
+ * Usage is forwarded as its own chunk before `finish`: the agent loop records
+ * whatever usage chunk the stream carries, and the token-meter projection folds
+ * it into the session totals.
+ *
+ * The text is emitted as one closed block, never as a token delta. DSH derives
+ * output speed from the first token delta and the message settle time; this
+ * reply is assembled after several sequential model calls, so a synthetic delta
+ * emitted here would report hundreds of thousands of tok/s for a beat that
+ * actually took seconds. Without a delta the loop records no decode window and
+ * the speed pill stays absent, while token counts, cache rate, and the rendered
+ * message are unaffected.
  * @param options - the intercepted request, used for provider attribution.
  * @param text - assistant text to emit.
+ * @param usage - summed usage of every model call this beat made.
  * @returns the chunk stream.
  */
-async function* textReply(options: GenerateOptions, text: string): AsyncGenerator<StreamChunk> {
-  const content = text.length === 0 ? [] : [{ type: 'text' as const, text }]
-  yield { type: 'block-start', index: 0, blockType: 'text' }
-  if (text.length > 0) yield { type: 'text-delta', index: 0, text }
+export async function* textReply(
+  options: GenerateOptions,
+  text: string,
+  usage?: TokenUsage,
+): AsyncGenerator<StreamChunk> {  yield { type: 'block-start', index: 0, blockType: 'text' }
   yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+  if (usage !== undefined && (usage.inputTokens > 0 || usage.outputTokens > 0
+    || (usage.cacheReadTokens ?? 0) > 0 || (usage.cacheWriteTokens ?? 0) > 0)) {
+    yield { type: 'usage', usage: { ...usage, totalTokens: usage.inputTokens + usage.outputTokens
+      + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) } }
+  }
   yield { type: 'finish', reason: { kind: 'stop' } }
   void options
 }
@@ -1626,6 +1813,24 @@ async function* textReply(options: GenerateOptions, text: string): AsyncGenerato
   if (mode === undefined) return 'rp'
   if (mode !== 'rp' && mode !== 'novel') throw new TavernInputError(`未知的酒馆模式：${mode}`)
   return mode
+}
+
+/**
+ * Turn a display name into a file name safe on Windows and POSIX.
+ *
+ * Export is a download, not a write, so only characters that break a save
+ * dialog need replacing; an empty result falls back so the name is never `.charc`.
+ * @param name - card or workspace name.
+ * @returns a usable base name without extension.
+ */
+function safeFileName(name: string): string {
+  const cleaned = name
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/^\.+/, '')
+    .replace(/[.\s]+$/, '')
+    .trim()
+    .slice(0, 80)
+  return cleaned.length > 0 ? cleaned : 'tavern'
 }
 
 function errorText(error: unknown): string {

@@ -1,5 +1,6 @@
 import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
+import { downloadDocument, pickTextFile } from './characters.js'
 
 /** How secondary keys combine with a primary hit. */
 export type WorldbookLogic = 'and_any' | 'and_all' | 'not_any' | 'not_all'
@@ -117,6 +118,36 @@ async function saveWorldbook(
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ workspaceId, entries }),
+  })
+  const body = await readJson(response)
+  return Array.isArray(body.entries) ? body.entries as WorldbookEntryView[] : []
+}
+
+/**
+ * Ask the host for the workspace worldbook as a `.world` document.
+ * @param workspaceId - tavern workspace id.
+ * @returns the suggested file name and document text.
+ */
+export async function exportWorldbook(workspaceId: string): Promise<{ file: string; text: string }> {
+  const response = await fetch(`/tavern/worldbook/transfer?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    headers: { accept: 'application/json' },
+    cache: 'no-store',
+  })
+  const body = await readJson(response)
+  return { file: String(body.file), text: String(body.text) }
+}
+
+/**
+ * Replace the workspace worldbook from a `.world` document.
+ * @param workspaceId - tavern workspace id.
+ * @param text - document text.
+ * @returns the stored entries.
+ */
+export async function importWorldbook(workspaceId: string, text: string): Promise<WorldbookEntryView[]> {
+  const response = await fetch('/tavern/worldbook/transfer', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ workspaceId, text }),
   })
   const body = await readJson(response)
   return Array.isArray(body.entries) ? body.entries as WorldbookEntryView[] : []
@@ -257,6 +288,36 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
     void commit(state.entries.filter(entry => entry.id !== id), '已删除条目', null)
   }
 
+  const onImport = useCallback(async () => {
+    setState(prev => ({ ...prev, error: null, notice: null }))
+    let picked: { name: string; text: string } | undefined
+    try {
+      picked = await pickTextFile('.world,application/json')
+    } catch (cause) {
+      setState(prev => ({ ...prev, error: errorText(cause) }))
+      return
+    }
+    if (picked === undefined) return
+    setState(prev => ({ ...prev, saving: true }))
+    try {
+      const entries = await importWorldbook(props.workspaceId, picked.text)
+      setState(prev => ({ ...prev, saving: false, entries, notice: `已导入 ${entries.length} 条世界书条目`, error: null }))
+      setDraft(null)
+    } catch (cause) {
+      setState(prev => ({ ...prev, saving: false, error: errorText(cause) }))
+    }
+  }, [props.workspaceId])
+
+  const onExport = useCallback(async () => {
+    setState(prev => ({ ...prev, error: null, notice: null }))
+    try {
+      downloadDocument(await exportWorldbook(props.workspaceId))
+      setState(prev => ({ ...prev, notice: '已导出世界书' }))
+    } catch (cause) {
+      setState(prev => ({ ...prev, error: errorText(cause) }))
+    }
+  }, [props.workspaceId])
+
   const previewHits = useMemo(
     () => (state.preview.trim().length === 0 ? [] : previewActivation(state.entries, state.preview)),
     [state.entries, state.preview],
@@ -266,14 +327,30 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
 
   const listPane = createElement('aside', { className: 'dshtavern-wb-sidebar' },
     createElement('div', { className: 'dshtavern-wb-side-head' },
-      createElement('span', { className: 'dshtavern-wb-heading' }, '世界书'),
-      createElement('span', { className: 'dshtavern-wb-count' }, String(state.entries.length)),
-      createElement('button', {
-        type: 'button',
-        className: 'dshtavern-button dshtavern-button-primary dshtavern-wb-new',
-        disabled: state.saving,
-        onClick: () => setDraft(blankEntry()),
-      }, '新建')),
+      createElement('div', { className: 'dshtavern-wb-side-title' },
+        createElement('span', { className: 'dshtavern-wb-heading' }, '世界书'),
+        createElement('span', { className: 'dshtavern-wb-count' }, String(state.entries.length))),
+      createElement('div', { className: 'dshtavern-wb-side-actions' },
+        createElement('button', {
+          type: 'button',
+          className: 'dshtavern-button dshtavern-wb-new',
+          disabled: state.saving,
+          title: '从 .world 文件导入（替换当前世界书）',
+          onClick: () => { void onImport() },
+        }, '导入'),
+        createElement('button', {
+          type: 'button',
+          className: 'dshtavern-button dshtavern-wb-new',
+          disabled: state.saving || state.entries.length === 0,
+          title: '导出为 .world 文件',
+          onClick: () => { void onExport() },
+        }, '导出'),
+        createElement('button', {
+          type: 'button',
+          className: 'dshtavern-button dshtavern-button-primary dshtavern-wb-new',
+          disabled: state.saving,
+          onClick: () => setDraft(blankEntry()),
+        }, '新建'))),
     createElement('div', { className: 'dshtavern-wb-list' },
       state.loading
         ? createElement('div', { className: 'dshtavern-wb-empty' }, '加载中…')

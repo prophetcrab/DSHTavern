@@ -272,14 +272,26 @@ export function buildCharacterMessage(narration: string, playerInput: string): s
  * extracting the outermost braces. A reply that carries no JSON at all is
  * treated as pure narration, which keeps the story moving instead of failing the
  * turn.
+ *
+ * Both the JSON and the prose fallback pass through {@link splitTranscriptShaped}
+ * first: a director that answers as a transcript (`[旁白] … [白鹭] …`) would
+ * otherwise put another character's dialogue on the stage as narration, where
+ * every later character reads it as something they witnessed.
  * @param text - raw director output.
  * @returns the parsed decision.
  */
 export function parseDirectorReply(text: string): DirectorDecision {
   const json = extractJsonObject(text)
   if (json === undefined) {
-    const narration = text.trim()
-    return { narration, inner: '', }
+    const split = splitTranscriptShaped(text)
+    if (split !== undefined) {
+      return {
+        narration: split.narration,
+        inner: '',
+        ...(split.speakerName === undefined ? {} : { nextSpeaker: split.speakerName }),
+      }
+    }
+    return { narration: text.trim(), inner: '' }
   }
   const narration = typeof json.narration === 'string' ? json.narration.trim() : ''
   const inner = typeof json.inner === 'string' ? json.inner.trim() : ''
@@ -287,8 +299,64 @@ export function parseDirectorReply(text: string): DirectorDecision {
   const nextSpeaker = typeof speaker === 'string' && speaker.length > 0 && speaker !== 'null'
     ? speaker
     : undefined
-  return { narration, inner, ...(nextSpeaker === undefined ? {} : { nextSpeaker }) }
+  // A narration field that carries speaker tags is the same defect as a prose
+  // transcript, only wrapped in JSON. Keep the narration and route the tagged
+  // speaker through the character call unless the director named one already.
+  const split = splitTranscriptShaped(narration)
+  if (split !== undefined && nextSpeaker === undefined) {
+    return {
+      narration: split.narration,
+      inner,
+      ...(split.speakerName === undefined ? {} : { nextSpeaker: split.speakerName }),
+    }
+  }
+  return {
+    narration: split === undefined ? narration : split.narration,
+    inner,
+    ...(nextSpeaker === undefined ? {} : { nextSpeaker }),
+  }
 }
+
+/** Tag the orchestrator uses for narration lines in a rendered transcript. */
+const NARRATION_TAG = '旁白'
+
+/** A line-shaped `[speaker]` tag at the start of a transmission line. */
+const TRANSCRIPT_TAG = /^\s*\[([^\]\n]{1,20})\]\s*(.*)$/
+
+/**
+ * Split a transcript-shaped reply into narration and the first speaker tag.
+ *
+ * The director is asked for JSON, but it sometimes answers the way the stage is
+ * rendered. This reads the leading narration lines, drops their `[旁白]`
+ * markers, and reports the first non-narration tag as the speaker. Text after
+ * that tag is discarded: the named character gets its own call, and replaying a
+ * pre-written line as well would stage the same speech twice.
+ * @param text - raw director output, possibly JSON-wrapped narration.
+ * @returns narration plus the tagged speaker name; `undefined` when no tag appears.
+ */
+export function splitTranscriptShaped(text: string): { narration: string; speakerName?: string } | undefined {
+  const lines = text.split('\n')
+  const narration: string[] = []
+  let sawNarrationTag = false
+  for (const line of lines) {
+    const match = TRANSCRIPT_TAG.exec(line)
+    if (match === null) {
+      narration.push(line)
+      continue
+    }
+    const tag = match[1]?.trim() ?? ''
+    const rest = match[2] ?? ''
+    if (tag === NARRATION_TAG) {
+      sawNarrationTag = true
+      if (rest.trim().length > 0) narration.push(rest)
+      continue
+    }
+    return { narration: narration.join('\n').trim(), speakerName: tag }
+  }
+  if (!sawNarrationTag) return undefined
+  return { narration: narration.join('\n').trim() }
+}
+
 
 /**
  * Resolve the director's speaker reference against the cast.

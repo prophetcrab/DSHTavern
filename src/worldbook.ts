@@ -197,6 +197,78 @@ export async function readWorldbook(workspaceDir: string): Promise<WorldbookFile
   return parseWorldbook(text, worldbookPath(workspaceDir))
 }
 
+/** Discriminator stamped into an exported `.world` file. */
+export const WORLDBOOK_EXPORT_KIND = 'dshtavern.worldbook'
+
+/** Envelope written to a `.world` file. */
+export interface WorldbookExport {
+  readonly kind: typeof WORLDBOOK_EXPORT_KIND
+  readonly schema: number
+  /** ISO-8601 of the export, informational only. */
+  readonly exportedAt: string
+  /** Workspace title the book came from, informational only. */
+  readonly source?: string
+  readonly entries: readonly WorldbookEntry[]
+}
+
+/**
+ * Render one workspace's worldbook as a portable `.world` document.
+ *
+ * The export carries every entry verbatim so a round-trip through import
+ * reproduces the same book; the envelope's own fields are advisory and never
+ * feed back into matching.
+ * @param book - stored worldbook.
+ * @param source - workspace title for provenance, when known.
+ * @returns the JSON text to download.
+ */
+export function exportWorldbookText(book: WorldbookFile, source?: string): string {
+  const payload: WorldbookExport = {
+    kind: WORLDBOOK_EXPORT_KIND,
+    schema: WORLDBOOK_SCHEMA,
+    exportedAt: new Date().toISOString(),
+    ...(source === undefined ? {} : { source }),
+    entries: book.entries,
+  }
+  return `${JSON.stringify(payload, null, 2)}\n`
+}
+
+/**
+ * Parse a `.world` document into entries ready for {@link writeWorldbook}.
+ *
+ * Accepts the exported envelope and, for hand-written files, a bare entry
+ * array. Each entry is validated by {@link buildEntry}; a document whose
+ * entries are all invalid is rejected rather than silently importing nothing.
+ * @param text - file content.
+ * @param path - file path for diagnostics.
+ * @returns the validated entries.
+ * @throws WorldbookInvalidError when the document is unusable.
+ */
+export function parseWorldbookImport(text: string, path: string): WorldbookEntry[] {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new WorldbookInvalidError('世界书文件不是合法 JSON', path)
+  }
+  let raw: unknown
+  if (Array.isArray(value)) {
+    raw = value
+  } else if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>
+    if (record.kind !== undefined && record.kind !== WORLDBOOK_EXPORT_KIND) {
+      throw new WorldbookInvalidError(`不是酒馆世界书文件（kind=${String(record.kind)}）`, path)
+    }
+    raw = record.entries
+  } else {
+    throw new WorldbookInvalidError('世界书文件必须是对象或数组', path)
+  }
+  if (!Array.isArray(raw)) throw new WorldbookInvalidError('世界书文件缺少 entries 数组', path)
+  if (raw.length > WORLDBOOK_ENTRIES_MAX) {
+    throw new WorldbookInvalidError(`世界书最多 ${WORLDBOOK_ENTRIES_MAX} 条`, path)
+  }
+  return raw.map(item => buildEntry(item, path))
+}
+
 /**
  * Persist one workspace's worldbook atomically.
  * @param workspaceDir - tavern workspace root.
