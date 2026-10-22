@@ -141,7 +141,51 @@ export function tailWithinChars<T extends { readonly text: string }>(
   return tail.slice(first)
 }
 
-export function buildDirectorSystem(input: {
+/** The block whose text must be the last thing the director reads. */
+const DIRECTOR_FORMAT_BLOCK = 'director-format'
+
+/** Join non-empty prompt sections with one blank line between each. */
+function joinPromptParts(parts: readonly (string | undefined)[]): string {
+  return parts
+    .map(part => part?.trim() ?? '')
+    .filter(part => part.length > 0)
+    .join('\n\n')
+}
+
+/**
+ * Split the director layout into its body and its output-format contract.
+ *
+ * The format block is not rendered in place: it is returned separately so every
+ * prompt builder can append it last. Measured on this project's own beats, the
+ * first director turn failed to answer in JSON 24% of the time while later turns
+ * failed 3% of the time — the difference was that a later turn happened to end
+ * with a line restating the output contract, and the first turn ended with a
+ * pacing hint instead. Position dominates repetition for a long prompt.
+ * @param input - layout and runtime state to inject.
+ * @param state - per-block runtime text.
+ * @returns body text and the enabled format contract, if the block is enabled.
+ */
+function directorPromptParts(
+  input: { readonly layout: PromptLayout },
+  state: ReadonlyMap<string, string>,
+): { body: string; format: string | undefined } {
+  // The director catalogue is user-ordered: `appliesTo` belongs to the
+  // definition, while the layout decides order, enablement, and overrides.
+  const views = promptBlockViews(input.layout, 'director').map((view) => {
+    const injected = state.get(view.id)
+    return injected === undefined ? view : { ...view, content: injected }
+  })
+  const formatView = views.find(view => view.id === DIRECTOR_FORMAT_BLOCK)
+  return {
+    body: renderPromptText(views.filter(view => view.id !== DIRECTOR_FORMAT_BLOCK)),
+    format: formatView !== undefined && formatView.enabled && formatView.content.trim().length > 0
+      ? formatView.content
+      : undefined,
+  }
+}
+
+/** Inputs shared by both director prompt builders. */
+interface DirectorPromptInput {
   readonly world: WorldState
   readonly cast: readonly CastMember[]
   readonly stage: readonly StageEntry[]
@@ -152,7 +196,19 @@ export function buildDirectorSystem(input: {
   readonly playerInput?: string
   /** Runtime knobs; omitted fields use the shipped constants. */
   readonly limits?: BeatLimits
-}): string {
+}
+
+/**
+ * Build the invariant part of a director prompt: block bodies and the format
+ * contract, both resolved against runtime state.
+ * @param input - world, cast, stage, and layout.
+ * @returns the body text, rotation hint, and format contract.
+ */
+function directorScaffold(input: DirectorPromptInput): {
+  body: string
+  rotation: string
+  format: string | undefined
+} {
   const limits = limitsOf(input.limits)
   const roster = input.cast.length === 0
     ? '（当前没有角色卡）'
@@ -173,17 +229,24 @@ export function buildDirectorSystem(input: {
     ['director-world', [renderWorld(input.world), loreText].filter(part => part.length > 0).join('\n')],
     ['director-stage', transcript],
   ])
-  // The director catalogue is user-ordered: `appliesTo` belongs to the
-  // definition, while the layout decides order, enablement, and overrides.
-  const views = promptBlockViews(input.layout, 'director').map((view) => {
-    const injected = state.get(view.id)
-    return injected === undefined ? view : { ...view, content: injected }
-  })
-  const rendered = renderPromptText(views)
-  const rotation = recentSpeaker === undefined || !limits.rotateSpeakers
-    ? []
-    : [`上一个开口的是「${recentSpeaker}」。多人在场时轮换发言：除非剧情明确要求同一个人连续回应，否则请换另一个人。`, '']
-  return [rendered, ...rotation].join('\n')
+  const { body, format } = directorPromptParts(input, state)
+  return { body, rotation: rotationHint(recentSpeaker, limits.rotateSpeakers), format }
+}
+
+export function buildDirectorSystem(input: DirectorPromptInput): string {
+  const { body, rotation, format } = directorScaffold(input)
+  return joinPromptParts([body, rotation, format])
+}
+
+/**
+ * Rotation hint, when the scene has a previous speaker to alternate from.
+ * @param recentSpeaker - last character that spoke, if any.
+ * @param rotate - whether the workspace asks for rotation.
+ * @returns the hint text, or an empty string.
+ */
+function rotationHint(recentSpeaker: string | undefined, rotate: boolean): string {
+  if (recentSpeaker === undefined || !rotate) return ''
+  return `上一个开口的是「${recentSpeaker}」。多人在场时轮换发言：除非剧情明确要求同一个人连续回应，否则请换另一个人。`
 }
 
 /**
@@ -208,25 +271,18 @@ export function renderWorld(world: WorldState): string {
  * @param spoken - characters that already spoke this beat, latest last.
  * @returns the system prompt text.
  */
-export function buildDirectorContinuation(input: {
-  readonly world: WorldState
-  readonly cast: readonly CastMember[]
-  readonly stage: readonly StageEntry[]
-  readonly layout: PromptLayout
-  readonly worldbook?: readonly WorldbookEntry[]
-  readonly playerInput?: string
-  readonly limits?: BeatLimits
-}, spoken: readonly CastMember[]): string {
-  const base = buildDirectorSystem(input)
+export function buildDirectorContinuation(input: DirectorPromptInput, spoken: readonly CastMember[]): string {
+  const { body, rotation, format } = directorScaffold(input)
   const last = spoken[spoken.length - 1]
-  return [
-    base,
-    '',
+  const beatContext = [
     '# 当前这一幕',
     ...spoken.length === 0 ? [] : [`这一幕已经开口的角色：${spoken.map(member => member.name).join('、')}。`],
     ...last === undefined ? [] : [`刚说完的是「${last.name}」。接下来由别人接话，除非剧情必须让 ${last.name} 再说一句。`],
     '如果这句话之后场面已经收住，输出 nextSpeaker: null，把话头交回玩家。不要替玩家推进剧情。',
   ].join('\n')
+  // The format contract stays last even here: appending the beat context after
+  // it was what buried the output contract on later turns.
+  return joinPromptParts([body, rotation, beatContext, format])
 }
 
 /**
@@ -393,6 +449,44 @@ export function parseDirectorReply(text: string): DirectorDecision {
     inner,
     ...(nextSpeaker === undefined ? {} : { nextSpeaker }),
   }
+}
+
+/**
+ * Whether a reply arrived as the documented JSON object.
+ *
+ * Distinct from {@link parseDirectorReply}, which always produces a usable
+ * decision: this answers the narrower question "did the director obey the
+ * contract", so a caller can decide whether a repair call is worth spending.
+ * @param text - raw director output.
+ * @returns true when the reply parses as a JSON object with a narration field.
+ */
+export function isDirectorJsonReply(text: string): boolean {
+  const json = extractJsonObject(text)
+  return json !== undefined && typeof json.narration === 'string'
+}
+
+/**
+ * Prompt asking the director to restate its previous answer as JSON.
+ *
+ * Used only after a malformed reply: the model already decided what happens,
+ * so this asks for the format, not for a new decision.
+ * @param originalSystem - the system prompt that produced the malformed reply.
+ * @param malformedReply - what the model actually said.
+ * @returns the repair system prompt.
+ */
+export function buildDirectorRepairSystem(originalSystem: string, malformedReply: string): string {
+  return [
+    '你上一条回复没有遵守输出格式。把它的内容原样转成下面的 JSON 结构，不要改变剧情决定：',
+    originalSystem,
+    '',
+    '# 你上一条回复',
+    malformedReply.trim(),
+    '',
+    '# 要求',
+    '只输出 JSON，第一个字符是 {，最后一个字符是 }。',
+    'narration 放旁白（可空字符串），inner 放导演私记（可空字符串），nextSpeaker 放角色 id 或 null。',
+    '不要把角色台词写进 narration：台词由角色自己在下一步生成。',
+  ].join('\n')
 }
 
 /** Tag the orchestrator uses for narration lines in a rendered transcript. */

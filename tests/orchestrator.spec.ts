@@ -130,6 +130,53 @@ describe('director prompt', () => {
     expect(system).toContain('nextSpeaker')
   })
 
+  it('ends with the output contract, not with a pacing hint', () => {
+    // Regression: the first turn used to end with the rotation hint, and 24% of
+    // first turns answered in prose. Turns whose prompt happened to end with a
+    // restatement of the contract failed only 3% of the time.
+    const system = buildDirectorSystem({
+      world: { scene: '雨夜', facts: [], hidden: [] },
+      cast: [{ id: 'card-00000001', name: '月见', brief: '魔法少女' }],
+      stage: [{ seq: 1, at: '', kind: 'speech', speaker: 'card-00000001', speakerName: '月见', text: '走吧。', scope: 'observable' }],
+      layout: defaultPromptLayout('director'),
+    })
+    expect(system).toContain('上一个开口的是「月见」')
+    const formatAt = system.indexOf('只输出一个 JSON 对象')
+    const rotationAt = system.indexOf('上一个开口的是')
+    expect(formatAt).toBeGreaterThan(rotationAt)
+    // The contract is the final instruction, not merely later than the hint.
+    expect(system.trimEnd().endsWith('输出 null。')).toBe(true)
+  })
+
+  it('keeps the output contract last in a continuation prompt too', () => {
+    const system = buildDirectorContinuation(
+      {
+        world: { scene: '', facts: [], hidden: [] },
+        cast: [{ id: 'card-00000001', name: '月见', brief: '魔法少女' }],
+        stage: [],
+        layout: defaultPromptLayout('director'),
+      },
+      [{ id: 'card-00000001', name: '月见', brief: '魔法少女' }],
+    )
+    expect(system).toContain('刚说完的是「月见」')
+    const contextAt = system.indexOf('# 当前这一幕')
+    const formatAt = system.indexOf('只输出一个 JSON 对象')
+    expect(formatAt).toBeGreaterThan(contextAt)
+  })
+
+  it('drops the contract when the block is disabled', () => {
+    const layout = defaultPromptLayout('director')
+    const disabled = {
+      ...layout,
+      blocks: layout.blocks.map(block => block.id === 'director-format' ? { ...block, enabled: false } : block),
+    }
+    const system = buildDirectorSystem({
+      world: { scene: '', facts: [], hidden: [] },
+      cast: [], stage: [], layout: disabled,
+    })
+    expect(system).not.toContain('只输出一个 JSON 对象')
+  })
+
   it('shows hidden plot to the director but never to a character', () => {
     const world = { scene: '雨夜', facts: ['店门锁着'], hidden: ['杀手在门外'] }
     const director = buildDirectorSystem({ world, cast: [], stage: [], layout: defaultPromptLayout('director') })

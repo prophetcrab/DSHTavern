@@ -48,6 +48,8 @@ import {
   buildDirectorContinuation,
   buildDirectorSystem,
   parseDirectorReply,
+  isDirectorJsonReply,
+  buildDirectorRepairSystem,
   renderBeatMarkdown,
   resolveSpeaker,
   mentionedSpeaker,
@@ -1091,7 +1093,20 @@ export class TavernWorkspaceService extends Service {
           : '（继续这一幕。）' },
       ], config.directorModel, replyBudgetChars(config, 'director'), config.reasoningReserveTokens)
       addUsage(beatUsage, directorResult.usage)
-      const directorReply = directorResult.text
+      let directorReply = directorResult.text
+      // One repair attempt when the director ignored the output contract. The
+      // model has already decided the beat, so this asks it to restate the same
+      // decision as JSON rather than to decide again; the cost is one extra call
+      // on the fraction of turns that miss, and it buys back the structural
+      // narration/speaker split that the prose fallback throws away.
+      if (!isDirectorJsonReply(directorReply) && !directorResult.truncated) {
+        const repaired = await this.complete(options, buildDirectorRepairSystem(directorSystem, directorReply), [
+          { role: 'user', text: '把它转成 JSON。' },
+        ], config.directorModel, replyBudgetChars(config, 'director'), config.reasoningReserveTokens)
+        addUsage(beatUsage, repaired.usage)
+        if (isDirectorJsonReply(repaired.text)) directorReply = repaired.text
+        if (repaired.truncated) truncatedBeat = true
+      }
       const decision = parseDirectorReply(directorReply)
       if (directorResult.truncated) truncatedBeat = true
       const resolved = resolveSpeaker(decision, cast)

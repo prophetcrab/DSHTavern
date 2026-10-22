@@ -314,7 +314,8 @@ export const DIRECTOR_BLOCKS: readonly PromptBlockDefinition[] = [
     source: 'director',
     description: '导演必须输出的 JSON 结构',
     editable: true,
-    defaultContent: '只输出一个 JSON 对象，不要代码围栏，不要任何解释：\n'
+    defaultContent: '只输出一个 JSON 对象：第一个字符是 {，最后一个字符是 }。\n'
+      + '不要代码围栏，不要任何解释，不要在 JSON 前后写任何文字。\n'
       + '{"narration":"给玩家看的旁白，可为空字符串","inner":"只有你知道的剧情推进，可为空字符串","nextSpeaker":"角色 id，或 null"}\n'
       + 'nextSpeaker 必须是名册中的 id。如果这一幕没有任何角色会开口（纯环境描写、沉默、时间流逝），输出 null。',
   },
