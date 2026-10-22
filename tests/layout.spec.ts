@@ -36,6 +36,19 @@ describe('pre-chat opening card', () => {
   it('keeps the card from spanning the whole conversation width', () => {
     expect(ruleFor('.dshtavern-greeting')).toContain('max-width')
   })
+
+  it('ships a generating state with a spinner', () => {
+    // Generation is a real model call; without a waiting state the player sees
+    // an empty pane and assumes nothing happened.
+    expect(PANEL_CSS).toContain('.dshtavern-opening-spinner')
+    expect(PANEL_CSS).toContain('@keyframes dshtavern-spin')
+    expect(PANEL_CSS).toContain('.dshtavern-opening-loading-title')
+  })
+
+  it('stops the spinner for reduced-motion users', () => {
+    const reduce = PANEL_CSS.slice(PANEL_CSS.indexOf('.dshtavern-opening-spinner'))
+    expect(reduce).toContain('prefers-reduced-motion')
+  })
 })
 
 describe('side header layout', () => {

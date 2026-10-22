@@ -105,6 +105,7 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
   const summary = props.useSessions(list => list.byId[props.session.sessionId]) as { cwd?: string } | undefined
   const cwd = summary?.cwd
   const [opening, setOpening] = useState<OpeningView | null>(null)
+  const [loading, setLoading] = useState(false)
   const [station, setStation] = useState<{ workspaceId: string } | null>(null)
 
   // Track the tavern registry so a newly created workspace is recognized without
@@ -123,18 +124,41 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
   useEffect(() => {
     if (station === null) {
       setOpening(null)
+      setLoading(false)
       return
     }
+    // Generation is a real model call (tens of seconds the first time), so the
+    // card reports progress instead of leaving the player staring at nothing.
     let cancelled = false
+    setLoading(true)
     fetchOpening(station.workspaceId, props.session.sessionId).then((next) => {
-      if (!cancelled) setOpening(next ?? null)
+      if (cancelled) return
+      setOpening(next ?? null)
+      setLoading(false)
     }).catch(() => {
-      if (!cancelled) setOpening(null)
+      if (cancelled) return
+      setOpening(null)
+      setLoading(false)
     })
     return () => { cancelled = true }
   }, [station, props.session.sessionId])
 
-  if (!props.session.blank || opening === null) return null
+  if (!props.session.blank) return null
+
+  if (loading) {
+    return createElement('section', {
+      className: 'dshtavern-greeting dshtavern-greeting-loading',
+      'aria-label': '正在生成开场',
+      'aria-busy': true,
+    },
+    createElement('div', { className: 'dshtavern-opening-spinner', 'aria-hidden': true }),
+    createElement('div', { className: 'dshtavern-opening-loading-text' },
+      createElement('div', { className: 'dshtavern-opening-loading-title' }, '正在生成开场…'),
+      createElement('div', { className: 'dshtavern-opening-loading-hint' },
+        '首次进入需要一次模型调用，通常十几秒。生成后会存进本会话，之后打开不再重复生成。')))
+  }
+
+  if (opening === null) return null
 
   // Script form: the model wrote the scene and its lines, so each segment keeps
   // its own voice instead of being flattened into one paragraph.

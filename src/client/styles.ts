@@ -491,6 +491,32 @@ export const PANEL_CSS = `
   font-size: var(--tv-fs-small);
   text-align: right;
 }
+/* Generating state: a model call is running, so say so rather than show a
+   blank pane under the hero. */
+.dshtavern-greeting-loading {
+  display: flex;
+  align-items: center;
+  gap: calc(12px * var(--tv-scale));
+}
+.dshtavern-opening-spinner {
+  flex: none;
+  width: calc(18px * var(--tv-scale));
+  height: calc(18px * var(--tv-scale));
+  box-sizing: border-box;
+  border: calc(2px * var(--tv-scale)) solid color-mix(in srgb, var(--tv-accent) 22%, transparent);
+  border-top-color: var(--tv-accent);
+  border-radius: 50%;
+  animation: dshtavern-spin 720ms linear infinite;
+}
+@keyframes dshtavern-spin {
+  to { transform: rotate(360deg); }
+}
+.dshtavern-opening-loading-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dshtavern-opening-loading-title { font-size: var(--tv-fs-body); font-weight: 500; color: var(--dsw-alias-label-primary); }
+.dshtavern-opening-loading-hint { font-size: var(--tv-fs-small); line-height: 1.5; color: var(--dsw-alias-label-secondary); }
+@media (prefers-reduced-motion: reduce) {
+  .dshtavern-opening-spinner { animation: none; border-top-color: color-mix(in srgb, var(--tv-accent) 60%, transparent); }
+}
 `
 
 /** Shared class names; every rule is prefixed with `dshtavern-`. */

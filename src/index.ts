@@ -596,6 +596,14 @@ export class TavernWorkspaceService extends Service {
   private readonly presetAttempts = new WeakSet<Agent>()
   /** Tavern sessions by id, so the request cleaner can resolve their workspace. */
   private readonly tavernSessionCwd = new Map<string, string>()
+  /**
+   * In-flight opening generations, keyed by story directory.
+   *
+   * The pre-chat card asks for the script and the first beat also needs it; a
+   * player who types while the card is still spinning must not trigger a second
+   * model call, and must still get the script staged rather than the fallback.
+   */
+  private readonly openingGenerations = new Map<string, Promise<OpeningScript>>()
 
   /**
    * @param ctx - Cordis context carrying `workspaceRegistry`.
@@ -986,8 +994,11 @@ export class TavernWorkspaceService extends Service {
     // narration and character lines — before the director runs, so the scene is
     // already established instead of blank. A story whose script could not be
     // generated falls back to the cards' static scenario and greeting.
+    // Read the stored script, or join the generation the pre-chat card already
+    // started. Waiting here is what keeps the static fallback from winning the
+    // race when the player types while the card is still generating.
     const script = stage.length === 0 && story !== undefined
-      ? await readOpeningScript(storyDirectory(cwd, story))
+      ? await this.ensureOpeningScriptForDirectory(cwd, story)
       : undefined
     const staticOpening = stage.length === 0 && (script === undefined || script.segments.length === 0)
       ? selectOpening(cards)
@@ -1684,18 +1695,53 @@ export class TavernWorkspaceService extends Service {
    */
   async ensureOpeningScript(workspaceId: string, sessionId: string): Promise<OpeningScript> {
     const workspace = await this.requireTavernWorkspace(workspaceId)
-    const directory = storyDirectory(workspace.path, sessionId)
+    return this.ensureOpeningScriptForDirectory(workspace.path, sessionId)
+  }
+
+  /**
+   * Generate a story's opening script from its workspace directory.
+   *
+   * Shared by the pre-chat route (which only knows the workspace id) and the
+   * first beat (which only knows the directory), so both join one call.
+   * @param workspacePath - tavern workspace root.
+   * @param sessionId - chat identity.
+   * @returns the stored or generated script; empty when it cannot be produced.
+   */
+  private async ensureOpeningScriptForDirectory(workspacePath: string, sessionId: string): Promise<OpeningScript> {
+    const directory = storyDirectory(workspacePath, sessionId)
     const stored = await readOpeningScript(directory)
     if (stored !== undefined) return stored
 
-    const cards = listCharacterCardsSync(workspace.path)
+    // One generation per story: the pre-chat card and the first beat both ask,
+    // and the player may send while the card is still waiting.
+    const pending = this.openingGenerations.get(directory)
+    if (pending !== undefined) return pending
+    const generation = this.generateOpeningScript(workspacePath, directory, sessionId)
+      .finally(() => { this.openingGenerations.delete(directory) })
+    this.openingGenerations.set(directory, generation)
+    return generation
+  }
+
+  /**
+   * Generate and store one story's opening script.
+   * @param workspacePath - tavern workspace root.
+   * @param directory - story directory owning the script file.
+   * @param sessionId - chat identity, used to check the stage is still empty.
+   * @returns the generated script, or an empty one when it cannot be produced.
+   */
+  private async generateOpeningScript(
+    workspacePath: string,
+    directory: string,
+    sessionId: string,
+  ): Promise<OpeningScript> {
+    const cards = listCharacterCardsSync(workspacePath)
     if (cards.length === 0) return { segments: [] }
     // The story already started; an opening written now would arrive late and
     // read as a second beginning.
-    const stage = await readStage(workspace.path, sessionId)
+    const stage = await readStage(workspacePath, sessionId)
     if (stage.length > 0) return { segments: [] }
 
-    const book = await readWorldbook(workspace.path)
+    const book = await readWorldbook(workspacePath)
     const system = buildOpeningSystem({ cards, worldbook: book.entries })
     const selection = this.defaultSelection()
     if (selection === undefined) return { segments: [] }
