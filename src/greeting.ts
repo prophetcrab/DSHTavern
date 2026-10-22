@@ -25,6 +25,53 @@ export interface TavernGreeting {
   readonly text: string
 }
 
+/** The scene-setting narration an opening shows before any character speaks. */
+export interface TavernOpeningNarration {
+  /** Card whose `scenario` supplied the text. */
+  readonly cardId: string
+  /** The narration itself. */
+  readonly text: string
+}
+
+/** Everything a blank chat shows before the player speaks. */
+export interface TavernOpening {
+  /** Scene setting drawn from the first card that defines a `scenario`. */
+  readonly narration?: TavernOpeningNarration
+  /** First character line drawn from the first card that defines a greeting. */
+  readonly greeting?: TavernGreeting
+}
+
+/**
+ * Resolve a tavern's opening: the scene, then the first line spoken.
+ *
+ * The scene comes from a card's `scenario`, which the author already writes as
+ * "where we are" — it reached the character prompt but never the player. The
+ * line comes from a card's `greetings.first`. They are resolved independently,
+ * so a cast whose first card has a scene but no greeting still opens with the
+ * scene.
+ * @param cards - the workspace's cards, in roster order.
+ * @returns the opening; both fields are absent when no card defines them.
+ */
+export function selectOpening(cards: readonly CharacterCard[]): TavernOpening {
+  let narration: TavernOpeningNarration | undefined
+  for (const card of cards) {
+    const text = card.scenario.trim()
+    if (text.length === 0) continue
+    narration = { cardId: card.id, text }
+    break
+  }
+  const greeting = selectGreeting(cards)
+  return {
+    ...(narration === undefined ? {} : { narration }),
+    ...(greeting === undefined ? {} : { greeting }),
+  }
+}
+
+/** @param opening - resolved opening. @returns whether it shows anything at all. */
+export function hasOpening(opening: TavernOpening): boolean {
+  return opening.narration !== undefined || opening.greeting !== undefined
+}
+
 /**
  * Pick the opening line for a tavern's cast.
  *
@@ -42,6 +89,19 @@ export function selectGreeting(cards: readonly CharacterCard[]): TavernGreeting 
     return { cardId: card.id, name: card.name, text }
   }
   return undefined
+}
+
+/**
+ * Render the opening narration as a staged line.
+ * @param narration - resolved scene setting.
+ * @returns the stage fields to append.
+ */
+export function openingNarrationStageLine(narration: TavernOpeningNarration): {
+  readonly kind: 'narration'
+  readonly text: string
+  readonly scope: 'observable'
+} {
+  return { kind: 'narration', text: narration.text, scope: 'observable' }
 }
 
 /**

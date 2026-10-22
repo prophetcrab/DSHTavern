@@ -14,11 +14,10 @@ import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { matchTavernWorkspace, subscribeToolboxState, readToolboxState, ensureTaverns } from './toolbox.js'
 
-/** One workspace's resolved opening line, as served by `/tavern/greeting`. */
-interface GreetingView {
-  readonly cardId: string
-  readonly name: string
-  readonly text: string
+/** One workspace's resolved opening, as served by `/tavern/greeting`. */
+interface OpeningView {
+  readonly narration?: { readonly cardId: string; readonly text: string }
+  readonly greeting?: { readonly cardId: string; readonly name: string; readonly text: string }
 }
 
 /** Props the session-scoped dock slot supplies. */
@@ -30,32 +29,37 @@ export interface GreetingDockProps {
 }
 
 /**
- * Read the opening line for one workspace.
+ * Read the opening for one workspace.
  * @param workspaceId - registered tavern workspace id.
- * @returns the greeting, or `undefined` when no card defines one.
+ * @returns the scene and first line, or `undefined` when no card defines either.
  */
-async function fetchGreeting(workspaceId: string): Promise<GreetingView | undefined> {
+async function fetchOpening(workspaceId: string): Promise<OpeningView | undefined> {
   const response = await fetch(`/tavern/greeting?workspaceId=${encodeURIComponent(workspaceId)}`, {
     headers: { accept: 'application/json' },
     cache: 'no-store',
   })
-  const body = await response.json() as { ok?: unknown; greeting?: unknown }
+  const body = await response.json() as { ok?: unknown } & Partial<OpeningView>
   if (body.ok !== true) return undefined
-  const greeting = body.greeting as Partial<GreetingView> | null | undefined
-  if (greeting === null || greeting === undefined) return undefined
-  if (typeof greeting.name !== 'string' || typeof greeting.text !== 'string') return undefined
-  return { cardId: String(greeting.cardId ?? ''), name: greeting.name, text: greeting.text }
+  const narration = typeof body.narration?.text === 'string' && body.narration.text.trim().length > 0
+    ? { cardId: String(body.narration.cardId ?? ''), text: body.narration.text }
+    : undefined
+  const greeting = typeof body.greeting?.text === 'string' && typeof body.greeting.name === 'string'
+    && body.greeting.text.trim().length > 0
+    ? { cardId: String(body.greeting.cardId ?? ''), name: body.greeting.name, text: body.greeting.text }
+    : undefined
+  if (narration === undefined && greeting === undefined) return undefined
+  return { ...(narration === undefined ? {} : { narration }), ...(greeting === undefined ? {} : { greeting }) }
 }
 
 /**
- * Show the card's opening line above the composer while the chat is blank.
+ * Show the scene and first line above the composer while the chat is blank.
  * @param props - session identity and blank flag.
  * @returns the card, or `null` when it does not apply.
  */
 export function TavernGreetingDock(props: GreetingDockProps): ReactElement | null {
   const summary = props.useSessions(list => list.byId[props.session.sessionId]) as { cwd?: string } | undefined
   const cwd = summary?.cwd
-  const [greeting, setGreeting] = useState<GreetingView | null>(null)
+  const [opening, setOpening] = useState<OpeningView | null>(null)
   const [station, setStation] = useState<{ workspaceId: string } | null>(null)
 
   // Track the tavern registry so a newly created workspace is recognized without
@@ -73,29 +77,35 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
 
   useEffect(() => {
     if (station === null) {
-      setGreeting(null)
+      setOpening(null)
       return
     }
     let cancelled = false
-    fetchGreeting(station.workspaceId).then((next) => {
-      if (!cancelled) setGreeting(next ?? null)
+    fetchOpening(station.workspaceId).then((next) => {
+      if (!cancelled) setOpening(next ?? null)
     }).catch(() => {
-      if (!cancelled) setGreeting(null)
+      if (!cancelled) setOpening(null)
     })
     return () => { cancelled = true }
   }, [station])
 
-  if (!props.session.blank || greeting === null) return null
+  if (!props.session.blank || opening === null) return null
 
   return createElement('section', {
     className: 'dshtavern-greeting',
-    'aria-label': `${greeting.name} 的开场白`,
+    'aria-label': '开场',
   },
-  createElement('div', { className: 'dshtavern-greeting-head' },
-    createElement('span', { className: 'dshtavern-greeting-avatar', 'aria-hidden': true },
-      greeting.name.slice(0, 1)),
-    createElement('div', { className: 'dshtavern-greeting-title' },
-      createElement('span', { className: 'dshtavern-greeting-name' }, greeting.name),
-      createElement('span', { className: 'dshtavern-greeting-hint' }, '开场白 · 回应她即可开始'))),
-  createElement('p', { className: 'dshtavern-greeting-text' }, greeting.text))
+  opening.narration === undefined
+    ? null
+    : createElement('p', { className: 'dshtavern-opening-narration' }, opening.narration.text),
+  opening.greeting === undefined
+    ? null
+    : createElement('div', { className: 'dshtavern-opening-speech' },
+      createElement('div', { className: 'dshtavern-greeting-head' },
+        createElement('span', { className: 'dshtavern-greeting-avatar', 'aria-hidden': true },
+          opening.greeting.name.slice(0, 1)),
+        createElement('div', { className: 'dshtavern-greeting-title' },
+          createElement('span', { className: 'dshtavern-greeting-name' }, opening.greeting.name),
+          createElement('span', { className: 'dshtavern-greeting-hint' }, '开场白 · 回应即可开始'))),
+      createElement('p', { className: 'dshtavern-greeting-text' }, opening.greeting.text)))
 }

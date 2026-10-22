@@ -1533,6 +1533,21 @@ export const TOOLBOX_CSS = `
   line-height: 1.75;
   white-space: pre-wrap;
 }
+/* Scene setting: reads as narration, so it is quoted like one. */
+.dshtavern-opening-narration {
+  margin: 0 0 calc(12px * var(--tv-scale));
+  padding-inline-start: calc(10px * var(--tv-scale));
+  border-inline-start: 2px solid color-mix(in srgb, var(--dsw-alias-label-primary) 22%, transparent);
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--tv-fs-body);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+.dshtavern-opening-narration:last-child { margin-bottom: 0; }
+.dshtavern-opening-speech {
+  padding-top: calc(12px * var(--tv-scale));
+  border-top: var(--tv-hairline) solid var(--dsw-alias-border-l1);
+}
 @media (max-width: 560px) {
   .dshtavern-agent-row { flex-direction: column; align-items: stretch; gap: 6px; }
   .dshtavern-agent-row-toggle { flex-direction: row; align-items: center; }

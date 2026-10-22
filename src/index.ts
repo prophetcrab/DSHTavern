@@ -54,7 +54,7 @@ import {
   PLAYER_INPUT_MAX,
 } from './orchestrator.js'
 import { fromCardEntries } from './worldbook.js'
-import { greetingStageLine, selectGreeting } from './greeting.js'
+import { greetingStageLine, openingNarrationStageLine, selectOpening } from './greeting.js'
 import { buildPreview } from './preview.js'
 import type { PromptPreview } from './preview.js'
 import type { BeatRecord, BeatSegment, CastMember, DirectorDecision } from './orchestrator.js'
@@ -69,6 +69,7 @@ import {
   writeAgentConfig,
 } from './agent-config.js'
 import type { AgentModelChoice, TavernAgentConfig } from './agent-config.js'
+import type { TavernOpening } from './greeting.js'
 import {
   WorldbookInvalidError,
   exportWorldbookText,
@@ -974,22 +975,28 @@ export class TavernWorkspaceService extends Service {
     // a fallback that keeps the scene moving, not the final word on who answers.
     const addressed = config.honorPlayerMention ? mentionedSpeaker(playerInput, cast) : undefined
 
-    // The first beat of an empty story stages the card's opening line before the
-    // director runs, so the scene starts from what the card authored instead of
-    // from a blank stage. Later beats find a non-empty stage and skip this.
-    const opening = stage.length === 0 ? selectGreeting(cards) : undefined
+    // The first beat of an empty story stages the card's opening — scene, then
+    // first line — before the director runs, so the scene starts from what the
+    // cards authored instead of from a blank stage. Later beats find a
+    // non-empty stage and skip this.
+    const opening = stage.length === 0 ? selectOpening(cards) : undefined
 
     const segments: BeatSegment[] = []
     const spoken: CastMember[] = []
     const turns: BeatTurn[] = []
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
-    if (opening !== undefined) {
-      const line = greetingStageLine(opening)
+    // Staged, not segmented: the client already showed the opening as the
+    // pre-chat card, so replaying it here would print it twice. The stage copy
+    // is what the director and every character read as history.
+    if (opening?.narration !== undefined) {
+      const line = openingNarrationStageLine(opening.narration)
       stage.push({ seq: nextSeq(stage), at: new Date().toISOString(), ...line })
       staged.push(line)
-      // Staged, not segmented: the client already showed this line as the
-      // pre-chat opener, so replaying it here would print it twice. The stage
-      // copy is what the director and every character read as history.
+    }
+    if (opening?.greeting !== undefined) {
+      const line = greetingStageLine(opening.greeting)
+      stage.push({ seq: nextSeq(stage), at: new Date().toISOString(), ...line })
+      staged.push(line)
     }
     // Sum of every model call this beat made. The orchestrator stands in for the
     // loop's own call, so it owns forwarding usage back to the loop.
@@ -1633,13 +1640,13 @@ export class TavernWorkspaceService extends Service {
   }
 
   /**
-   * Resolve one workspace's opening line.
+   * Resolve one workspace's opening: scene setting plus the first character line.
    * @param workspaceId - registered tavern workspace id.
-   * @returns the card that owns the opening, or `undefined` when none defines one.
+   * @returns the resolved opening; both fields are absent when no card defines them.
    */
-  async greeting(workspaceId: string): Promise<{ cardId: string; name: string; text: string } | undefined> {
+  async opening(workspaceId: string): Promise<TavernOpening> {
     const workspace = await this.requireTavernWorkspace(workspaceId)
-    return selectGreeting(listCharacterCardsSync(workspace.path))
+    return selectOpening(listCharacterCardsSync(workspace.path))
   }
 
   /**
@@ -1696,7 +1703,7 @@ export class TavernWorkspaceService extends Service {
     return catalog
   }
 
-  /** Resolve one workspace's opening line for the pre-chat card. */
+  /** Resolve one workspace's opening for the pre-chat card. */
   private async handleGreeting(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!allowLoopback(req, res)) return
     if (req.method !== 'GET') {
@@ -1704,7 +1711,7 @@ export class TavernWorkspaceService extends Service {
       return
     }
     try {
-      sendJson(res, 200, { ok: true, greeting: await this.greeting(workspaceIdFromUrl(req)) })
+      sendJson(res, 200, { ok: true, ...await this.opening(workspaceIdFromUrl(req)) })
     } catch (error) {
       this.fail(res, error)
     }
