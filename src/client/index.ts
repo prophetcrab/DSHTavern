@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { CLASS, PANEL_CSS } from './styles.js'
 import { installTavernWorkspaceMarks } from './marks.js'
+import { TavernGreetingDock } from './greeting.js'
 import { TavernToolboxDetector, TavernToolboxOverlay } from './toolbox.js'
 
 /** The id shared by the sidebar entry and the main panel it opens. */
@@ -860,6 +861,16 @@ export function apply(ctx: Context): void {
     order: 20,
     label: '酒馆工具箱',
   }, TavernToolboxOverlay as never))
+  // The opening line a blank tavern chat shows above its composer. It is a
+  // session-scoped dock entry so it appears only inside a real chat, and it
+  // renders nothing once the player has spoken.
+  const greetingDock = 'conversation.input.dock' as never
+  ctx.slots.inject(greetingDock, () => ctx.slots.register({
+    name: greetingDock,
+    id: 'tavern-greeting',
+    order: -10,
+    label: '酒馆开场白',
+  } as never, TavernGreetingDock as never))
   // Mark tavern workspaces in the sidebar list. The sidebar exposes no slot for
   // a workspace row, so this observes the rendered rows instead.
   ctx.effect(() => installTavernWorkspaceMarks(), 'dshtavern: sidebar workspace marks')

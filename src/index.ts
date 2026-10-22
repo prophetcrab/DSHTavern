@@ -54,6 +54,7 @@ import {
   PLAYER_INPUT_MAX,
 } from './orchestrator.js'
 import { fromCardEntries } from './worldbook.js'
+import { greetingStageLine, selectGreeting } from './greeting.js'
 import { buildPreview } from './preview.js'
 import type { PromptPreview } from './preview.js'
 import type { BeatRecord, BeatSegment, CastMember, DirectorDecision } from './orchestrator.js'
@@ -973,10 +974,23 @@ export class TavernWorkspaceService extends Service {
     // a fallback that keeps the scene moving, not the final word on who answers.
     const addressed = config.honorPlayerMention ? mentionedSpeaker(playerInput, cast) : undefined
 
+    // The first beat of an empty story stages the card's opening line before the
+    // director runs, so the scene starts from what the card authored instead of
+    // from a blank stage. Later beats find a non-empty stage and skip this.
+    const opening = stage.length === 0 ? selectGreeting(cards) : undefined
+
     const segments: BeatSegment[] = []
     const spoken: CastMember[] = []
     const turns: BeatTurn[] = []
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
+    if (opening !== undefined) {
+      const line = greetingStageLine(opening)
+      stage.push({ seq: nextSeq(stage), at: new Date().toISOString(), ...line })
+      staged.push(line)
+      // Staged, not segmented: the client already showed this line as the
+      // pre-chat opener, so replaying it here would print it twice. The stage
+      // copy is what the director and every character read as history.
+    }
     // Sum of every model call this beat made. The orchestrator stands in for the
     // loop's own call, so it owns forwarding usage back to the loop.
     const beatUsage = emptyUsage()
@@ -1402,6 +1416,11 @@ export class TavernWorkspaceService extends Service {
       }), 'dshtavern: /tavern/worldbook/transfer')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
+        path: '/tavern/greeting',
+        handler: (req, res) => this.handleGreeting(req, res),
+      }), 'dshtavern: /tavern/greeting')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
         path: '/tavern/agent',
         handler: (req, res) => this.handleAgentConfig(req, res),
       }), 'dshtavern: /tavern/agent')
@@ -1614,6 +1633,16 @@ export class TavernWorkspaceService extends Service {
   }
 
   /**
+   * Resolve one workspace's opening line.
+   * @param workspaceId - registered tavern workspace id.
+   * @returns the card that owns the opening, or `undefined` when none defines one.
+   */
+  async greeting(workspaceId: string): Promise<{ cardId: string; name: string; text: string } | undefined> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    return selectGreeting(listCharacterCardsSync(workspace.path))
+  }
+
+  /**
    * Read one workspace's agent orchestration settings.
    * @param workspaceId - registered tavern workspace id.
    * @returns the stored config, or the defaults when absent.
@@ -1665,6 +1694,20 @@ export class TavernWorkspaceService extends Service {
       catalog.push({ provider: route.id, name: route.name, models })
     }
     return catalog
+  }
+
+  /** Resolve one workspace's opening line for the pre-chat card. */
+  private async handleGreeting(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    if (req.method !== 'GET') {
+      methodNotAllowed(res, 'GET')
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, greeting: await this.greeting(workspaceIdFromUrl(req)) })
+    } catch (error) {
+      this.fail(res, error)
+    }
   }
 
   /** Read, replace, or reset one workspace's agent orchestration settings. */

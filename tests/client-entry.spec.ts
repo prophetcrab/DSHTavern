@@ -104,6 +104,7 @@ describe('browser entry', () => {
       'sidebar.panellist',
       'conversation.input.left',
       'shell.overlay',
+      'conversation.input.dock',
     ])
     expect(entries[0]?.options.key).toBe(PANEL_ID)
     expect(entries[1]?.options.id).toBe(PANEL_ID)

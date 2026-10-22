@@ -1494,6 +1494,45 @@ export const TOOLBOX_CSS = `
   font-size: var(--tv-fs-body);
 }
 .dshtavern-agent-char-input { width: calc(84px * var(--tv-scale)); flex: none; }
+/* Pre-chat opening line: shown above the composer while a tavern chat is blank. */
+.dshtavern-greeting {
+  width: 100%;
+  max-width: calc(720px * var(--tv-scale));
+  margin: 0 auto calc(10px * var(--tv-scale));
+  padding: calc(14px * var(--tv-scale)) calc(16px * var(--tv-scale));
+  border: var(--tv-hairline) solid var(--dsw-alias-border-l1);
+  border-radius: var(--tv-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+  box-sizing: border-box;
+}
+.dshtavern-greeting-head {
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--tv-scale));
+  margin-bottom: calc(10px * var(--tv-scale));
+}
+.dshtavern-greeting-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: calc(28px * var(--tv-scale));
+  height: calc(28px * var(--tv-scale));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tv-accent, #4f7fe0) 16%, transparent);
+  color: var(--tv-accent, #4f7fe0);
+  font-size: var(--tv-fs-small);
+  font-weight: 600;
+}
+.dshtavern-greeting-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.dshtavern-greeting-name { font-size: var(--tv-fs-body); font-weight: 500; }
+.dshtavern-greeting-hint { color: var(--dsw-alias-label-secondary); font-size: var(--tv-fs-small); }
+.dshtavern-greeting-text {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: var(--tv-fs-body);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
 @media (max-width: 560px) {
   .dshtavern-agent-row { flex-direction: column; align-items: stretch; gap: 6px; }
   .dshtavern-agent-row-toggle { flex-direction: row; align-items: center; }
