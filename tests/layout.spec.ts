@@ -8,13 +8,35 @@ import { PANEL_CSS, STORY_CSS, TOOLBOX_CSS } from '../src/client/styles.ts'
  */
 const ALL_CSS = `${PANEL_CSS}\n${STORY_CSS}\n${TOOLBOX_CSS}`
 
-/** Extract one rule block by selector. */
+/** Extract the last rule block for one exact selector (earlier ones may only declare tokens). */
 function ruleFor(selector: string): string {
-  const start = ALL_CSS.indexOf(`${selector} {`)
+  const start = ALL_CSS.lastIndexOf(`${selector} {`)
   if (start === -1) return ''
   const end = ALL_CSS.indexOf('}', start)
   return end === -1 ? '' : ALL_CSS.slice(start, end)
 }
+
+describe('pre-chat opening card', () => {
+  it('lives in the always-mounted stylesheet, not the toolbox overlay', () => {
+    // The overlay only exists while its window is open, and the opening card
+    // renders in the conversation dock — an overlay-only rule would leave it
+    // completely unstyled, which is what happened when it shipped there.
+    expect(PANEL_CSS).toContain('.dshtavern-greeting {')
+    expect(PANEL_CSS).toContain('.dshtavern-opening-narration {')
+    expect(TOOLBOX_CSS).not.toContain('.dshtavern-greeting {')
+  })
+
+  it('declares its tokens on the card element, outside the panel', () => {
+    // The card is not inside `.dshtavern-panel`, so a panel-only `--tv-scale`
+    // would leave every calc() unresolved.
+    expect(PANEL_CSS).toContain('.dshtavern-panel,\n.dshtavern-greeting {')
+    expect(PANEL_CSS).toContain('--tv-scale: 1;')
+  })
+
+  it('keeps the card from spanning the whole conversation width', () => {
+    expect(ruleFor('.dshtavern-greeting')).toContain('max-width')
+  })
+})
 
 describe('side header layout', () => {
   it.each([

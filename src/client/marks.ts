@@ -9,6 +9,7 @@
  * attribute and re-marks on the next mutation.
  */
 import { subscribeToolboxState, readToolboxState, ensureTaverns } from './toolbox.js'
+import { PANEL_CSS } from './styles.js'
 
 /** Attribute set on a workspace row that belongs to a tavern. */
 export const TAVERN_ROW_ATTRIBUTE = 'data-dshtavern-workspace'
@@ -123,7 +124,11 @@ export function installTavernWorkspaceMarks(): () => void {
   if (document.getElementById(STYLE_ID) === null) {
     const style = document.createElement('style')
     style.id = STYLE_ID
-    style.textContent = SIDEBAR_CSS
+    // Panel tokens and rules ship with the sidebar marks rather than the
+    // toolbox overlay: this effect is mounted for the session's whole life,
+    // while the overlay only exists while its window is open — and the pre-chat
+    // opening card renders outside both.
+    style.textContent = SIDEBAR_CSS + PANEL_CSS
     document.head.appendChild(style)
   }
 

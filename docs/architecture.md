@@ -155,9 +155,10 @@
   - 结果按会话存到 `.dshtavern/stories/<session>/opening.json`，重开不再生成；舞台已有内容时不再生成（迟到的开场会读成第二个开头）。
   - 第一个 beat 按旁白/台词顺序把脚本写进舞台，导演与角色据此续写；写入舞台但不重复进本轮分段，因为客户端已经展示过。
   - 生成失败或解析不出可用段落时，回退到静态开场：`scenario` 作旁白、`greetings.first` 作台词，各取「名册顺序里第一个真正有内容的卡」。`greetings.alternates` 尚未使用（重开需搭配重生成）。
+  - **样式归属**：开场卡的规则放在 `PANEL_CSS`，由侧栏标记那个常驻 effect 注入；不能放 `TOOLBOX_CSS`——它只在工具箱浮层打开时挂载，会让卡片完全没有样式。`--tv-*` 设计变量同时声明在 `.dshtavern-panel` 和 `.dshtavern-greeting` 上，因为卡片渲染在会话 dock 里、不在面板内，只声明在面板上会让它的所有 `calc()` 失效。
 - 自动绑定 preset；`rp` 与 `novel` 工作区分别绑定 `tavern-rp` / `tavern-novel`。
 - 用量统计子插件：工作区总量、当前会话用量、输入/输出拆分、上下文占用条、缓存命中率条、会话明细表；每 10 秒刷新。面板内容限宽 720px 居中，两卡两表双列自适应（窄窗降为单列并隐藏次要列）。实测面板数值与 DSH 自身状态栏一致（12.2k tokens、命中率 12.3%、上下文 1.05%）。
-- 测试与构建：`pnpm test` 268 项通过（20 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
+- 测试与构建：`pnpm test` 271 项通过（20 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
 
 ## 九、未完成与已知问题
 

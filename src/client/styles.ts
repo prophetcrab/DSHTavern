@@ -10,7 +10,11 @@
  * large displays.
  */
 export const PANEL_CSS = `
-.dshtavern-panel {
+/* Tokens are declared on both the panel and the pre-chat card: the card renders
+   in the conversation dock, outside the panel, so panel-only variables would
+   leave every calc() in it unresolved. */
+.dshtavern-panel,
+.dshtavern-greeting {
   --tv-scale: 1;
   --tv-fs-body: calc(13.5px * var(--tv-scale));
   --tv-fs-small: calc(11.5px * var(--tv-scale));
@@ -29,6 +33,8 @@ export const PANEL_CSS = `
   /* brand-primary resolves to ink in the shipped theme, so fills and accents
      read the business-blue state token instead. */
   --tv-accent: var(--dsw-alias-state-business-primary, #4f7fe0);
+}
+.dshtavern-panel {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -40,11 +46,11 @@ export const PANEL_CSS = `
   color: var(--dsw-alias-label-primary);
   font-family: var(--dsw-font-family, system-ui, sans-serif);
 }
-@media (min-width: 1280px) { .dshtavern-panel { --tv-scale: 1.05; } }
-@media (min-width: 1600px) { .dshtavern-panel { --tv-scale: 1.12; } }
-@media (min-width: 1920px) { .dshtavern-panel { --tv-scale: 1.18; } }
-@media (min-width: 2300px) { .dshtavern-panel { --tv-scale: 1.25; } }
-@media (min-width: 2560px) { .dshtavern-panel { --tv-scale: 1.32; } }
+@media (min-width: 1280px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.05; } }
+@media (min-width: 1600px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.12; } }
+@media (min-width: 1920px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.18; } }
+@media (min-width: 2300px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.25; } }
+@media (min-width: 2560px) { .dshtavern-panel, .dshtavern-greeting { --tv-scale: 1.32; } }
 .dshtavern-panel * { box-sizing: border-box; }
 .dshtavern-card {
   display: flex;
@@ -414,6 +420,76 @@ export const PANEL_CSS = `
 .dshtavern-mode-desc { font-size: var(--tv-fs-small); color: var(--dsw-alias-label-secondary); line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) {
   .dshtavern-prompt-card { animation: none !important; transition: none !important; }
+}
+/* Pre-chat opening line: shown above the composer while a tavern chat is blank. */
+.dshtavern-greeting {
+  width: 100%;
+  max-width: calc(720px * var(--tv-scale));
+  margin: 0 auto calc(10px * var(--tv-scale));
+  padding: calc(14px * var(--tv-scale)) calc(16px * var(--tv-scale));
+  border: var(--tv-hairline) solid var(--dsw-alias-border-l1);
+  border-radius: var(--tv-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+  box-sizing: border-box;
+}
+.dshtavern-greeting-head {
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--tv-scale));
+  margin-bottom: calc(10px * var(--tv-scale));
+}
+.dshtavern-greeting-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: calc(28px * var(--tv-scale));
+  height: calc(28px * var(--tv-scale));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tv-accent, #4f7fe0) 16%, transparent);
+  color: var(--tv-accent, #4f7fe0);
+  font-size: var(--tv-fs-small);
+  font-weight: 600;
+}
+.dshtavern-greeting-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.dshtavern-greeting-name { font-size: var(--tv-fs-body); font-weight: 500; }
+.dshtavern-greeting-hint { color: var(--dsw-alias-label-secondary); font-size: var(--tv-fs-small); }
+.dshtavern-greeting-text {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: var(--tv-fs-body);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+/* Scene setting: reads as narration, so it is quoted like one. */
+.dshtavern-opening-narration {
+  margin: 0 0 calc(12px * var(--tv-scale));
+  padding-inline-start: calc(10px * var(--tv-scale));
+  border-inline-start: 2px solid color-mix(in srgb, var(--dsw-alias-label-primary) 22%, transparent);
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--tv-fs-body);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+.dshtavern-opening-narration:last-child { margin-bottom: 0; }
+.dshtavern-opening-speech {
+  margin-top: calc(12px * var(--tv-scale));
+  padding-top: calc(12px * var(--tv-scale));
+  border-top: var(--tv-hairline) solid var(--dsw-alias-border-l1);
+}
+/* A consecutive line from the same speaker continues the bubble: no rule. */
+.dshtavern-opening-speech[data-continued='true'] {
+  margin-top: calc(6px * var(--tv-scale));
+  padding-top: 0;
+  border-top: 0;
+}
+.dshtavern-opening-speech[data-continued='true'] .dshtavern-greeting-head {
+  margin-bottom: calc(6px * var(--tv-scale));
+}
+.dshtavern-opening-foot {
+  margin-top: calc(12px * var(--tv-scale));
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--tv-fs-small);
+  text-align: right;
 }
 `
 
@@ -1494,69 +1570,7 @@ export const TOOLBOX_CSS = `
   font-size: var(--tv-fs-body);
 }
 .dshtavern-agent-char-input { width: calc(84px * var(--tv-scale)); flex: none; }
-/* Pre-chat opening line: shown above the composer while a tavern chat is blank. */
-.dshtavern-greeting {
-  width: 100%;
-  max-width: calc(720px * var(--tv-scale));
-  margin: 0 auto calc(10px * var(--tv-scale));
-  padding: calc(14px * var(--tv-scale)) calc(16px * var(--tv-scale));
-  border: var(--tv-hairline) solid var(--dsw-alias-border-l1);
-  border-radius: var(--tv-radius-lg);
-  background: var(--dsw-alias-bg-layer-2);
-  box-sizing: border-box;
-}
-.dshtavern-greeting-head {
-  display: flex;
-  align-items: center;
-  gap: calc(10px * var(--tv-scale));
-  margin-bottom: calc(10px * var(--tv-scale));
-}
-.dshtavern-greeting-avatar {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: calc(28px * var(--tv-scale));
-  height: calc(28px * var(--tv-scale));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--tv-accent, #4f7fe0) 16%, transparent);
-  color: var(--tv-accent, #4f7fe0);
-  font-size: var(--tv-fs-small);
-  font-weight: 600;
-}
-.dshtavern-greeting-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.dshtavern-greeting-name { font-size: var(--tv-fs-body); font-weight: 500; }
-.dshtavern-greeting-hint { color: var(--dsw-alias-label-secondary); font-size: var(--tv-fs-small); }
-.dshtavern-greeting-text {
-  margin: 0;
-  color: var(--dsw-alias-label-primary);
-  font-size: var(--tv-fs-body);
-  line-height: 1.75;
-  white-space: pre-wrap;
-}
-/* Scene setting: reads as narration, so it is quoted like one. */
-.dshtavern-opening-narration {
-  margin: 0 0 calc(12px * var(--tv-scale));
-  padding-inline-start: calc(10px * var(--tv-scale));
-  border-inline-start: 2px solid color-mix(in srgb, var(--dsw-alias-label-primary) 22%, transparent);
-  color: var(--dsw-alias-label-secondary);
-  font-size: var(--tv-fs-body);
-  line-height: 1.75;
-  white-space: pre-wrap;
-}
-.dshtavern-opening-narration:last-child { margin-bottom: 0; }
-.dshtavern-opening-speech {
-  padding-top: calc(12px * var(--tv-scale));
-  border-top: var(--tv-hairline) solid var(--dsw-alias-border-l1);
-}
-.dshtavern-greeting > .dshtavern-opening-speech + .dshtavern-opening-narration {
-  margin-top: calc(12px * var(--tv-scale));
-}
-.dshtavern-opening-foot {
-  margin-top: calc(12px * var(--tv-scale));
-  color: var(--dsw-alias-label-secondary);
-  font-size: var(--tv-fs-small);
-  text-align: right;
-}
+
 @media (max-width: 560px) {
   .dshtavern-agent-row { flex-direction: column; align-items: stretch; gap: 6px; }
   .dshtavern-agent-row-toggle { flex-direction: row; align-items: center; }

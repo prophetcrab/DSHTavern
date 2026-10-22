@@ -143,15 +143,29 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
       className: 'dshtavern-greeting',
       'aria-label': '开场',
     },
-    opening.segments.map((segment, index) => segment.kind === 'narration'
-      ? createElement('p', { key: index, className: 'dshtavern-opening-narration' }, segment.text)
-      : createElement('div', { key: index, className: 'dshtavern-opening-speech' },
-        createElement('div', { className: 'dshtavern-greeting-head' },
-          createElement('span', { className: 'dshtavern-greeting-avatar', 'aria-hidden': true },
+    opening.segments.map((segment, index) => {
+      if (segment.kind === 'narration') {
+        return createElement('p', { key: index, className: 'dshtavern-opening-narration' }, segment.text)
+      }
+      // Consecutive lines from one speaker read as one turn: the repeated avatar
+      // and rule would make a single beat look like two.
+      const previous = opening.segments[index - 1]
+      const continued = previous?.kind === 'speech' && previous.cardId === segment.cardId
+      return createElement('div', {
+        key: index,
+        className: 'dshtavern-opening-speech',
+        'data-continued': continued ? 'true' : 'false',
+      },
+      createElement('div', { className: 'dshtavern-greeting-head' },
+        continued
+          ? null
+          : createElement('span', { className: 'dshtavern-greeting-avatar', 'aria-hidden': true },
             (segment.speakerName ?? '?').slice(0, 1)),
-          createElement('div', { className: 'dshtavern-greeting-title' },
-            createElement('span', { className: 'dshtavern-greeting-name' }, segment.speakerName ?? '角色'))),
-        createElement('p', { className: 'dshtavern-greeting-text' }, segment.text))),
+        createElement('div', { className: 'dshtavern-greeting-title' },
+          createElement('span', { className: 'dshtavern-greeting-name' },
+            continued ? '（继续）' : segment.speakerName ?? '角色'))),
+      createElement('p', { className: 'dshtavern-greeting-text' }, segment.text))
+    }),
     createElement('div', { className: 'dshtavern-opening-foot' }, '回应即可开始'))
   }
 
