@@ -463,6 +463,32 @@ function ToolWindow(): ReactElement | null {
             : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
 }
 
+/** How far the pointer must travel before a press becomes a drag. */
+export const LAUNCHER_DRAG_THRESHOLD_PX = 4
+
+/**
+ * Whether a launcher gesture counts as a drag.
+ *
+ * Sticky on purpose: once a gesture has crossed the threshold it stays a drag
+ * even if the pointer returns to its origin, otherwise releasing where the
+ * press started would produce a click and open the popover mid-drag.
+ * @param moved - whether this gesture already crossed the threshold.
+ * @param startX - press position, viewport pixels.
+ * @param startY - press position, viewport pixels.
+ * @param clientX - current pointer position.
+ * @param clientY - current pointer position.
+ * @returns whether the gesture is a drag.
+ */
+export function launcherGestureMoved(
+  moved: boolean,
+  startX: number,
+  startY: number,
+  clientX: number,
+  clientY: number,
+): boolean {
+  return moved || Math.hypot(clientX - startX, clientY - startY) >= LAUNCHER_DRAG_THRESHOLD_PX
+}
+
 /**
  * Frame-wide toolbox: the draggable launcher, its icon popover, and the tool
  * sub-window. Renders nothing outside tavern sessions.
@@ -478,9 +504,22 @@ export function TavernToolboxOverlay(): ReactElement | null {
     originLeft: number
     originTop: number
     moved: boolean
+    /** Element holding pointer capture, once a drag actually started. */
+    capture: {
+      setPointerCapture?(pointerId: number): void
+      releasePointerCapture?(pointerId: number): void
+    } | null
+    /** Latest position this gesture moved the launcher to. */
+    latest: FabPosition
   } | null>(null)
   const [dragging, setDragging] = useState(false)
-  /** Remembers that the last pointer sequence moved the launcher, so the click it produces is ignored. */
+  /**
+   * Whether the gesture that just ended moved the launcher.
+   *
+   * Cleared at pointerdown, not only in the click handler: a gesture whose
+   * pointerup lands outside the button produces no click, and a flag left set
+   * would swallow the next real click.
+   */
   const dragged = useRef(false)
 
   useEffect(() => {
@@ -510,13 +549,8 @@ export function TavernToolboxOverlay(): ReactElement | null {
     clientY: number
     currentTarget: { setPointerCapture?(pointerId: number): void }
   }) => {
-    // Capture is best-effort: an unknown pointer id (synthetic or already
-    // released) throws, and losing capture must not swallow the click.
-    try {
-      event.currentTarget.setPointerCapture?.(event.pointerId)
-    } catch {
-      // Dragging still works; only pointer capture outside the button is lost.
-    }
+    // A new gesture starts unclaimed; see the `dragged` ref comment.
+    dragged.current = false
     drag.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -524,33 +558,63 @@ export function TavernToolboxOverlay(): ReactElement | null {
       originLeft: position.left,
       originTop: position.top,
       moved: false,
+      capture: null,
+      latest: { left: position.left, top: position.top },
     }
     setDragging(true)
   }
 
-  const onPointerMove = (event: { clientX: number; clientY: number }) => {
+  const onPointerMove = (event: {
+    pointerId: number
+    clientX: number
+    clientY: number
+    currentTarget: { setPointerCapture?(pointerId: number): void }
+  }) => {
     const current = drag.current
     if (current === null) return
     const dx = event.clientX - current.startX
     const dy = event.clientY - current.startY
-    if (!current.moved && Math.hypot(dx, dy) < 4) return
-    current.moved = true
-    dragged.current = true
-    setPosition(clampFabPosition(
+    if (!current.moved) {
+      if (!launcherGestureMoved(false, current.startX, current.startY, event.clientX, event.clientY)) return
+      current.moved = true
+      dragged.current = true
+      // Capture only once the gesture is a drag. Capturing on pointerdown
+      // retargets the whole click to the button, which is what let a few pixels
+      // of pointer jitter turn a click into a drag.
+      try {
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        current.capture = event.currentTarget
+      } catch {
+        // Dragging still works; only pointer capture outside the button is lost.
+      }
+    }
+    const next = clampFabPosition(
       { left: current.originLeft + dx, top: current.originTop + dy },
       window.innerWidth,
       window.innerHeight,
-    ))
+    )
+    current.latest = next
+    setPosition(next)
   }
 
   const onPointerUp = () => {
     const current = drag.current
     drag.current = null
     setDragging(false)
-    if (current === null || !current.moved) return
+    if (current === null) return
+    if (current.capture?.releasePointerCapture !== undefined) {
+      try {
+        current.capture.releasePointerCapture(current.pointerId)
+      } catch {
+        // The pointer is already gone; capture released itself.
+      }
+    }
+    if (!current.moved) return
     // A completed drag suppresses the click that follows the pointerup, so
-    // dropping the launcher never also opens the popover.
-    saveFabPosition(position)
+    // dropping the launcher never also opens the popover. Persist the position
+    // this gesture actually reached: `position` in this closure is the value
+    // from the render that started the drag.
+    saveFabPosition(current.latest)
   }
 
   return createElement('div', null,

@@ -137,6 +137,15 @@ export const EMPTY_BEAT_NOTICE = '这一幕模型没有返回内容。可以再�
 /** Appended when any call in a beat hit its reply budget. */
 export const TRUNCATED_NOTICE = '（本幕达到设定的回复长度上限，内容被截断。可在 Agent 编排里调大回复长度。）'
 
+/**
+ * Reply text shown when a non-player trigger woke a tavern session.
+ *
+ * Refusing the turn keeps the story untouched. The trigger's own text is never
+ * forwarded: a scheduled reminder asking for a tool call reads as narration to
+ * the director, which turns a housekeeping message into plot.
+ */
+export const EXTERNAL_TRIGGER_NOTICE = '这是酒馆会话，只会回应你本人说的话。定时任务或其他自动触发的消息不会推进剧情。'
+
 /** Marker file name inside {@link TAVERN_DIRECTORY}. */
 export const MARKER_FILE = 'tavern.json'
 
@@ -1033,6 +1042,16 @@ export class TavernWorkspaceService extends Service {
     const marker = await readMarker(cwd)
     if (marker === undefined || tavernModeOf(marker) !== 'rp') {
       yield* emptyReply()
+      return
+    }
+    // Anything that woke this session on its own is not the player speaking.
+    // Refusing before the first model call keeps the stage and world untouched
+    // and costs nothing; the alternative is a cron reminder's prompt text
+    // becoming the beat's input.
+    const external = externalTriggerKind(options)
+    if (external !== undefined) {
+      this.ctx.logger.info(`[dshtavern] ignoring '${external}' trigger in tavern session`)
+      yield* textReply(options, EXTERNAL_TRIGGER_NOTICE)
       return
     }
     // Stage and world belong to this chat: another chat in the same tavern is a
@@ -2763,9 +2782,11 @@ export function lastUserText(options: GenerateOptions, max: number = PLAYER_INPU
     if (message === undefined || message.role !== 'user') continue
     if (isRuntimeContextMessage(message) || hasSystemReminder(message)) continue
     const kind = messageSourceKind(message)
-    // Tavern triggers start a turn but are not something the player said; the
-    // opening and regenerate beats read their input from elsewhere.
-    if (kind !== undefined && (kind === REGENERATE_SOURCE_KIND || kind === OPENING_SOURCE_KIND)) continue
+    // Only the player's own words are an utterance. Tavern triggers start a
+    // turn but read their input elsewhere, and any other turn-starter (a
+    // scheduled reminder, for instance) must never be replayed as if the player
+    // had typed it.
+    if (kind !== undefined && kind !== 'user') continue
     const text = message.content
       .filter(part => part.type === 'text')
       .map(part => (part as { text: string }).text)
@@ -2808,6 +2829,23 @@ export function isOpeningRequest(options: GenerateOptions): boolean {
  */
 export function isRegenerationRequest(options: GenerateOptions): boolean {
   return newestTriggerKind(options) === REGENERATE_SOURCE_KIND
+}
+
+/**
+ * Source kind of a turn-starter this plugin does not own.
+ *
+ * A tavern session is still a DSH session, so features that wake it on their own
+ * schedule deliver their messages here too. Those are not the player speaking:
+ * treating one as an utterance lets a cron reminder's prompt text become the
+ * beat's input and drives the story in a direction nobody asked for.
+ * @param options - the intercepted loop request.
+ * @returns the kind (for example `schedule`), or `undefined` for a player turn
+ *   and for the two triggers this plugin queues itself.
+ */
+export function externalTriggerKind(options: GenerateOptions): string | undefined {
+  const kind = newestTriggerKind(options)
+  if (kind === undefined || kind === OPENING_SOURCE_KIND || kind === REGENERATE_SOURCE_KIND) return undefined
+  return kind
 }
 
 /**

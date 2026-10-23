@@ -11,6 +11,7 @@ import {
   TavernWorkspaceNotFoundError,
   TavernWorkspaceService,
   ensureMarker,
+  externalTriggerKind,
   lastUserText,
 } from '../src/index.ts'
 import type { TavernWorkspaceRecord } from '../src/index.ts'
@@ -509,6 +510,110 @@ describe('tavern request cleaning (B-lite)', () => {
     expect(options.messages[0]?.content[0]?.text).toBe('OUR PROMPT')
   })
 
+  it('refuses a scheduled reminder before spending a model call', async () => {
+    const root = await temporaryRoot()
+    const directory = join(root, 'tavern')
+    await mkdir(directory, { recursive: true })
+    await ensureMarker(directory, 'test')
+    await createCharacterCard(directory, { name: '极光' })
+    const streamed: unknown[] = []
+    const ctx = new Context()
+    ctx.provide('workspaceRegistry', fakeWorkspaceRegistry([{ id: 'w1', path: directory, title: 'test' }]) as never)
+    ctx.provide('llm', {
+      stream: (options: unknown) => {
+        streamed.push(options)
+        return (async function* () {
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    } as never)
+    const fiber = ctx.plugin(TavernWorkspaceService as never) as unknown as PromiseLike<unknown> & {
+      dispose(): Promise<void>
+    }
+    await fiber
+    disposers.push(async () => { await fiber.dispose() })
+    const agent = {
+      session: { id: 's-schedule', header: { cwd: directory, agentPreset: 'tavern-rp' } },
+      ctx: ctx.extend(),
+    }
+    await (ctx as unknown as { serial(event: string, payload: unknown): Promise<unknown> })
+      .serial('agent/created', { agent })
+
+    const scheduled = markAgentLoopRequest({
+      provider: 'fake',
+      model: 'fake',
+      sessionId: 's-schedule',
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '[SCHEDULE REMINDER BATCH] 请调用 task_brief 工具' }],
+          source: { kind: 'schedule' },
+        },
+      ],
+    })
+    const next = (): AsyncIterable<never> => (async function* () {})()
+    const reply = await (ctx as unknown as {
+      waterfall(event: string, payload: unknown, next: unknown): Promise<AsyncIterable<unknown>>
+    }).waterfall('llm/stream', scheduled, next)
+    const texts: string[] = []
+    for await (const chunk of reply) {
+      const record = chunk as { type?: string; block?: { type?: string; text?: string } }
+      if (record.type === 'block-end' && record.block?.type === 'text') texts.push(record.block.text ?? '')
+    }
+    expect(texts.join('\n')).toContain('只会回应你本人说的话')
+    // The guard runs before the director call: no model request was made and
+    // the reminder's text never reached a prompt.
+    expect(streamed).toEqual([])
+  })
+
+  it('still orchestrates a player turn in the same session', async () => {
+    const root = await temporaryRoot()
+    const directory = join(root, 'tavern')
+    await mkdir(directory, { recursive: true })
+    await ensureMarker(directory, 'test')
+    await createCharacterCard(directory, { name: '极光' })
+    const streamed: unknown[] = []
+    const ctx = new Context()
+    ctx.provide('workspaceRegistry', fakeWorkspaceRegistry([{ id: 'w1', path: directory, title: 'test' }]) as never)
+    ctx.provide('llm', {
+      stream: (options: unknown) => {
+        streamed.push(options)
+        return (async function* () {
+          yield { type: 'text-delta', text: '{"narration":"风停了。","inner":"","nextSpeaker":null}' }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    } as never)
+    const fiber = ctx.plugin(TavernWorkspaceService as never) as unknown as PromiseLike<unknown> & {
+      dispose(): Promise<void>
+    }
+    await fiber
+    disposers.push(async () => { await fiber.dispose() })
+    const agent = {
+      session: { id: 's-player', header: { cwd: directory, agentPreset: 'tavern-rp' } },
+      ctx: ctx.extend(),
+    }
+    await (ctx as unknown as { serial(event: string, payload: unknown): Promise<unknown> })
+      .serial('agent/created', { agent })
+
+    const player = markAgentLoopRequest({
+      provider: 'fake',
+      model: 'fake',
+      sessionId: 's-player',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '我推开门。' }], source: { kind: 'user' } },
+      ],
+    })
+    const next = (): AsyncIterable<never> => (async function* () {})()
+    const reply = await (ctx as unknown as {
+      waterfall(event: string, payload: unknown, next: unknown): Promise<AsyncIterable<unknown>>
+    }).waterfall('llm/stream', player, next)
+    for await (const _chunk of reply) { void _chunk }
+    expect(streamed.length).toBeGreaterThan(0)
+    const first = streamed[0] as { messages?: Array<{ content?: Array<{ text?: string }> }> }
+    expect(JSON.stringify(first.messages)).toContain('我推开门。')
+  })
+
   it('leaves a hand-built auxiliary call alone instead of orchestrating it', async () => {
     const { ctx } = await tavernAgent()
     const options = {
@@ -536,6 +641,46 @@ describe('tavern request cleaning (B-lite)', () => {
       ],
     }
     expect(lastUserText(options as never)).toBe('我推开门。')
+  })
+
+  it('treats a scheduled reminder as an external trigger, not player input', () => {
+    const scheduled = {
+      provider: 'fake',
+      model: 'fake',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '我推开门。' }] },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '[SCHEDULE REMINDER BATCH]\nThis is a scheduled message from the user' }],
+          source: { kind: 'schedule' },
+        },
+      ],
+    }
+    // A cron reminder must not become the beat's utterance: its text would be
+    // read as the player's words by the director.
+    expect(externalTriggerKind(scheduled as never)).toBe('schedule')
+    expect(lastUserText(scheduled as never)).not.toContain('SCHEDULE REMINDER')
+  })
+
+  it('leaves a player turn and its own triggers unflagged', () => {
+    const player = {
+      provider: 'fake',
+      model: 'fake',
+      messages: [{ role: 'user', content: [{ type: 'text', text: '我推开门。' }], source: { kind: 'user' } }],
+    }
+    expect(externalTriggerKind(player as never)).toBeUndefined()
+    const opening = {
+      provider: 'fake',
+      model: 'fake',
+      messages: [{ role: 'user', content: [{ type: 'text', text: '（开场）' }], source: { kind: 'tavern-opening' } }],
+    }
+    expect(externalTriggerKind(opening as never)).toBeUndefined()
+    const regenerate = {
+      provider: 'fake',
+      model: 'fake',
+      messages: [{ role: 'user', content: [{ type: 'text', text: '（重新生成上一幕）' }], source: { kind: 'tavern-regenerate' } }],
+    }
+    expect(externalTriggerKind(regenerate as never)).toBeUndefined()
   })
 
   it('leaves non-tavern sessions untouched', async () => {

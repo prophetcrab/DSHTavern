@@ -3,8 +3,10 @@ import { PromptCardView, PromptEditorDialog, moveBlock, reorderVisibleBlocks } f
 import type { PromptCardProps, PromptEditorDialogProps, PromptBlockView } from '../src/client/prompt.ts'
 import {
   FAB_SIZE,
+  LAUNCHER_DRAG_THRESHOLD_PX,
   clampFabPosition,
   defaultFabPosition,
+  launcherGestureMoved,
   matchTavernWorkspace,
   publishStation,
   readToolboxState,
@@ -185,6 +187,24 @@ describe('floating launcher position', () => {
     const position = defaultFabPosition(1600, 900)
     expect(position.left).toBe(12)
     expect(position.top).toBe(900 - 190)
+  })
+})
+
+describe('launcher drag detection', () => {
+  it('keeps a tiny jitter a click, not a drag', () => {
+    expect(launcherGestureMoved(false, 100, 100, 101, 101)).toBe(false)
+    expect(launcherGestureMoved(false, 100, 100, 102, 102)).toBe(false)
+  })
+
+  it('turns into a drag once the pointer clears the threshold', () => {
+    expect(launcherGestureMoved(false, 100, 100, 100 + LAUNCHER_DRAG_THRESHOLD_PX + 1, 100)).toBe(true)
+    expect(launcherGestureMoved(false, 100, 100, 100, 100 + LAUNCHER_DRAG_THRESHOLD_PX)).toBe(true)
+  })
+
+  it('stays a drag after the pointer returns to the press point', () => {
+    // Otherwise releasing where the press started would fire the follow-up
+    // click and open the popover mid-drag.
+    expect(launcherGestureMoved(true, 100, 100, 100, 100)).toBe(true)
   })
 })
 

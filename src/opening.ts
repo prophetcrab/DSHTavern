@@ -227,14 +227,33 @@ export async function readOpeningScript(directory: string): Promise<OpeningScrip
     })
   }
   if (segments.length === 0) return undefined
+  const generatedBy = parseGeneratedBy(record.generatedBy)
   return {
     segments,
     ...(typeof record.focusCardId === 'string' ? { focusCardId: record.focusCardId } : {}),
     ...(typeof record.generatedAt === 'string' ? { generatedAt: record.generatedAt } : {}),
     ...(typeof record.appendedAt === 'string' ? { appendedAt: record.appendedAt } : {}),
+    ...(generatedBy === undefined ? {} : { generatedBy }),
     ...(typeof record.system === 'string' ? { system: record.system } : {}),
     ...(typeof record.message === 'string' ? { message: record.message } : {}),
   }
+}
+
+/**
+ * Validate the provider/model recorded for a stored script.
+ *
+ * Both halves are required: the transcript turn stamps this label, and a
+ * half-filled pair would report a route that never existed.
+ * @param value - decoded field.
+ * @returns the pair, or `undefined` when either half is missing.
+ */
+function parseGeneratedBy(value: unknown): { provider: string; model: string } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const provider = typeof record.provider === 'string' ? record.provider : ''
+  const model = typeof record.model === 'string' ? record.model : ''
+  if (provider.length === 0 || model.length === 0) return undefined
+  return { provider, model }
 }
 
 /**

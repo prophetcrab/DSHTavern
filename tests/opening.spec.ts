@@ -1,6 +1,26 @@
-import { describe, expect, it } from 'vitest'
-import { buildOpeningSystem, parseOpeningReply } from '../src/opening.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  buildOpeningSystem,
+  parseOpeningReply,
+  readOpeningScript,
+  writeOpeningScript,
+} from '../src/opening.ts'
 import type { CharacterCard } from '../src/character-card.ts'
+
+const roots: string[] = []
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
+
+async function storyDirectory(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'dshtavern-opening-'))
+  roots.push(root)
+  return root
+}
 
 function card(overrides: Partial<CharacterCard> = {}): CharacterCard {
   const now = '2026-10-22T00:00:00.000Z'
@@ -107,5 +127,32 @@ describe('parseOpeningReply', () => {
   it('caps the segment count', () => {
     const many = Array.from({ length: 20 }, (_, index) => ({ kind: 'narration', text: `第${index}段` }))
     expect(parseOpeningReply(JSON.stringify({ segments: many }), cards).segments.length).toBeLessThanOrEqual(8)
+  })
+})
+
+describe('stored opening script', () => {
+  it('reads back the provider/model that generated it', async () => {
+    const directory = await storyDirectory()
+    await writeOpeningScript(directory, {
+      segments: [{ kind: 'narration', text: '雨停了。' }],
+      generatedBy: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      system: 'SYSTEM',
+      message: '写开场。',
+    })
+    const stored = await readOpeningScript(directory)
+    // The transcript turn stamps this label; losing it makes the opening's
+    // trajectory row claim an unknown model.
+    expect(stored?.generatedBy).toEqual({ provider: 'deepseek-official', model: 'deepseek-flash' })
+    expect(stored?.system).toBe('SYSTEM')
+    expect(stored?.message).toBe('写开场。')
+  })
+
+  it('drops a half-filled or malformed provider/model pair', async () => {
+    const directory = await storyDirectory()
+    await writeOpeningScript(directory, {
+      segments: [{ kind: 'narration', text: '雨停了。' }],
+      generatedBy: { provider: 'only-provider', model: '' },
+    })
+    expect((await readOpeningScript(directory))?.generatedBy).toBeUndefined()
   })
 })
