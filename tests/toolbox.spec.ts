@@ -156,13 +156,15 @@ describe('tavern station matching', () => {
     { workspaceId: 'w2', workspacePath: 'D:/taverns/second', workspaceTitle: 'second' },
   ]
 
-  it('matches the workspace directory itself and subdirectories', () => {
+  it('matches the workspace directory itself', () => {
     expect(matchTavernWorkspace('C:\\Users\\crab\\.dsh\\taverns\\雾都夜话', taverns)?.workspaceId).toBe('w1')
-    expect(matchTavernWorkspace('C:\\Users\\crab\\.dsh\\taverns\\雾都夜话\\characters', taverns)?.workspaceId).toBe('w1')
     expect(matchTavernWorkspace('D:\\taverns\\second\\', taverns)?.workspaceId).toBe('w2')
   })
 
-  it('ignores non-tavern directories and empty cwd', () => {
+  it('ignores subdirectories, non-tavern directories, and empty cwd', () => {
+    // D004: only the directory itself carries the marker, so a session opened in
+    // a subdirectory is a normal DSH session and the toolbox must not appear.
+    expect(matchTavernWorkspace('C:\\Users\\crab\\.dsh\\taverns\\雾都夜话\\characters', taverns)).toBeNull()
     expect(matchTavernWorkspace('C:\\Users\\crab\\.dsh\\taverns\\another', taverns)).toBeNull()
     expect(matchTavernWorkspace('C:\\Users\\crab\\.dsh\\taverns\\雾都夜话-2', taverns)).toBeNull()
     expect(matchTavernWorkspace(undefined, taverns)).toBeNull()

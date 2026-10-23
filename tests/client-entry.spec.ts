@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { PANEL_ID, PanelView, apply, inject, moveBlock } from '../src/client/index.ts'
-import type { PanelViewProps, PromptPaneState } from '../src/client/index.ts'
+import { PANEL_ID, PanelView, apply, inject } from '../src/client/index.ts'
+import type { PanelViewProps } from '../src/client/index.ts'
 
 interface CapturedEntry {
   readonly name: string
@@ -31,19 +31,6 @@ function mount(): CapturedEntry[] {
   return entries
 }
 
-function emptyPrompt(): PromptPaneState {
-  return {
-    loading: false,
-    saving: false,
-    error: null,
-    notice: null,
-    savedAt: null,
-    blocks: [],
-    dragFrom: null,
-    dragOver: null,
-  }
-}
-
 function renderPanel(overrides: Partial<PanelViewProps> = {}): string {
   const props: PanelViewProps = {
     overview: null,
@@ -53,13 +40,12 @@ function renderPanel(overrides: Partial<PanelViewProps> = {}): string {
     notice: null,
     draftTitle: '',
     draftPath: '',
+    draftMode: 'rp',
     lastRefreshed: null,
     confirmUntag: null,
-    view: 'workspace',
-    selectedId: null,
-    prompt: emptyPrompt(),
     onTitleChange: () => {},
     onPathChange: () => {},
+    onModeChange: () => {},
     onCreate: () => {},
     onRefresh: () => {},
     onAdopt: () => {},
@@ -67,14 +53,6 @@ function renderPanel(overrides: Partial<PanelViewProps> = {}): string {
     onConfirmUntag: () => {},
     onCancelUntag: () => {},
     onSubmitShortcut: () => {},
-    onViewChange: () => {},
-    onSelectWorkspace: () => {},
-    onPromptDragStart: () => {},
-    onPromptDragOver: () => {},
-    onPromptDrop: () => {},
-    onPromptDragEnd: () => {},
-    onPromptToggle: () => {},
-    onPromptReset: () => {},
     ...overrides,
   }
   return JSON.stringify(PanelView(props))
@@ -187,21 +165,5 @@ describe('browser entry', () => {
     const icon = JSON.stringify(mount()[1]?.component({ size: 16, active: true } as never))
     expect(icon).toContain('酒')
     expect(icon).toContain('16')
-  })
-})
-
-describe('moveBlock', () => {
-  it('moves one item to the target index', () => {
-    expect(moveBlock(['a', 'b', 'c'], 0, 2)).toEqual(['b', 'c', 'a'])
-    expect(moveBlock(['a', 'b', 'c'], 2, 0)).toEqual(['c', 'a', 'b'])
-    expect(moveBlock(['a', 'b', 'c'], 1, 1)).toEqual(['a', 'b', 'c'])
-  })
-
-  it('returns a copy for identical or out-of-bounds indices', () => {
-    const source = ['a', 'b']
-    expect(moveBlock(source, 0, 0)).toEqual(['a', 'b'])
-    expect(moveBlock(source, 5, 0)).toEqual(['a', 'b'])
-    expect(moveBlock(source, 0, -1)).toEqual(['a', 'b'])
-    expect(moveBlock(source, 0, 0)).not.toBe(source)
   })
 })

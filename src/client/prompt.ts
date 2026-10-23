@@ -188,16 +188,18 @@ export interface PromptPreview {
  * the model would actually receive rather than a client-side approximation.
  * @param workspaceId - tavern workspace id.
  * @param scope - which prompt to assemble.
- * @param options - optional card selection and the sample line to scan.
+ * @param options - optional card selection, the sample line to scan, and the
+ *   chat whose stage and world the preview should reflect.
  * @returns the assembled preview.
  */
 export async function fetchPromptPreview(
   workspaceId: string,
   scope: PromptScope,
-  options: { cardId?: string; sample?: string } = {},
+  options: { cardId?: string; sample?: string; sessionId?: string } = {},
 ): Promise<PromptPreview> {
   const params = new URLSearchParams({ workspaceId, scope })
   if (options.cardId !== undefined) params.set('cardId', options.cardId)
+  if (options.sessionId !== undefined) params.set('sessionId', options.sessionId)
   params.set('sample', options.sample ?? '')
   const response = await fetch(`/tavern/preview?${params.toString()}`, {
     headers: { accept: 'application/json' },
@@ -398,6 +400,8 @@ export interface PromptOrchestrationProps {
   readonly workspaceId: string
   readonly workspaceTitle: string
   readonly workspacePath: string
+  /** Chat whose stage and world the preview should reflect. */
+  readonly sessionId?: string
 }
 
 /**
@@ -457,6 +461,7 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
     try {
       const next = await fetchPromptPreview(props.workspaceId, scope, {
         ...(previewCardId === undefined ? {} : { cardId: previewCardId }),
+        ...(props.sessionId === undefined ? {} : { sessionId: props.sessionId }),
         sample: previewSample,
       })
       setPreview(next)
@@ -465,7 +470,7 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
     } finally {
       setPreviewLoading(false)
     }
-  }, [props.workspaceId, scope, previewCardId, previewSample])
+  }, [props.workspaceId, props.sessionId, scope, previewCardId, previewSample])
 
   useEffect(() => {
     let cancelled = false

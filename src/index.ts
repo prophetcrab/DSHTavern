@@ -18,7 +18,7 @@ import { appendFile } from 'node:fs/promises'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, parse } from 'node:path'
+import { basename, isAbsolute, join, parse } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -28,9 +28,10 @@ import { createUserMessage, isAgentLoopRequest, ReasoningEffortId } from '@deeps
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { allowLoopback, methodNotAllowed, optionalString, readJsonObject, sendJson } from './http.js'
+import { HttpRequestError, allowLoopback, methodNotAllowed, optionalString, readJsonObject, sendJson } from './http.js'
 import {
   CharacterCardInvalidError,
+  CHARACTER_CARD_MAX_BYTES,
   createCharacterCard,
   deleteCharacterCard,
   exportCharacterCardText,
@@ -47,6 +48,7 @@ import {
   buildCharacterSystem,
   buildDirectorContinuation,
   buildDirectorSystem,
+  cardBrief,
   parseDirectorReply,
   isDirectorJsonReply,
   buildDirectorRepairSystem,
@@ -98,6 +100,8 @@ import {
 import type { AgentModelChoice, TavernAgentConfig } from './agent-config.js'
 import type { TavernOpening } from './greeting.js'
 import {
+  WORLDBOOK_CONTENT_MAX,
+  WORLDBOOK_ENTRIES_MAX,
   WorldbookInvalidError,
   exportWorldbookText,
   parseWorldbookImport,
@@ -107,6 +111,7 @@ import {
 import type { WorldbookEntry, WorldbookFile } from './worldbook.js'
 import type { StageEntry, WorldState } from './stage.js'
 import {
+  PROMPT_LAYOUT_MAX_BYTES,
   PROMPT_LAYOUT_SCHEMA,
   PromptLayoutInvalidError,
   PromptLayoutVersionError,
@@ -137,6 +142,19 @@ export const MARKER_FILE = 'tavern.json'
 
 /** Marker schema version this build reads and writes. */
 export const MARKER_SCHEMA = 1
+
+/**
+ * Request-body ceilings for the routes that write a bounded document.
+ *
+ * The stored ceilings are byte counts of the decoded document; a JSON body
+ * adds escaping and envelope overhead, so each route accepts a multiple of its
+ * document ceiling instead of the plugin-wide default.
+ */
+const PROMPT_BODY_MAX_BYTES = 4 * PROMPT_LAYOUT_MAX_BYTES
+const CARD_BODY_MAX_BYTES = 4 * CHARACTER_CARD_MAX_BYTES
+// Worst-case UTF-8 for one maximal worldbook (4 bytes per code point) plus room
+// for the JSON envelope: a document the store accepts must be importable.
+const WORLDBOOK_BODY_MAX_BYTES = WORLDBOOK_ENTRIES_MAX * WORLDBOOK_CONTENT_MAX * 4 + 8 * 1024 * 1024
 
 /** Durable identity of one tavern, stored inside its workspace directory. */
 export interface TavernMarker {
@@ -734,19 +752,22 @@ export class TavernWorkspaceService extends Service {
   /**
    * Assemble the prompt one scope would produce, without calling a model.
    * @param workspaceId - registered tavern workspace id.
-   * @param options - scope, optional card, and the sample line to scan.
+   * @param options - scope, optional card, the sample line to scan, and the
+   *   session whose stage/world the preview should reflect.
    * @returns the assembled system prompt and the lore it activated.
    */
   async previewPrompt(
     workspaceId: string,
-    options: { scope?: PromptScope; cardId?: string; sample?: string } = {},
+    options: { scope?: PromptScope; cardId?: string; sample?: string; sessionId?: string } = {},
   ): Promise<PromptPreview> {
     const workspace = await this.requireTavernWorkspace(workspaceId)
     const scope: PromptScope = options.scope === 'director' ? 'director' : 'character'
-    const [layout, cards, book] = await Promise.all([
+    const [layout, cards, book, world, config] = await Promise.all([
       readPromptLayout(workspace.path, scope),
       listCharacterCards(workspace.path),
       readWorldbook(workspace.path),
+      scope === 'director' ? readWorld(workspace.path, options.sessionId) : Promise.resolve(undefined),
+      readAgentConfig(workspace.path),
     ])
     return buildPreview({
       scope,
@@ -755,6 +776,8 @@ export class TavernWorkspaceService extends Service {
       ...(options.cardId === undefined ? {} : { cardId: options.cardId }),
       worldbook: book.entries,
       ...(options.sample === undefined ? {} : { sample: options.sample }),
+      ...(world === undefined ? {} : { world }),
+      limits: config,
     })
   }
 
@@ -902,23 +925,32 @@ export class TavernWorkspaceService extends Service {
    * select them in non-tavern workspaces, where they must never run. The filter
    * only wraps the roster read, so `agentPresets.select()` for auto-binding is
    * unaffected.
+   *
+   * The registry exposes no roster-filter extension point, so this wraps the
+   * prototype method and restores it when the plugin unloads. Without the
+   * restore, a reloaded plugin would stack a second wrapper and the module-level
+   * marker that used to guard this kept a disposed instance patched forever.
    */
   private hideTavernPresetFromRoster(): void {
-    const presets = (this.ctx as unknown as { get(name: string): unknown }).get('agentPresets') as
-      | { remoteExportList?: () => Promise<{ presets: Array<{ id?: string }> }> }
-      | undefined
-    if (presets?.remoteExportList === undefined) return
-    const marker = Symbol.for('dshtavern.roster-filter')
-    if ((presets as Record<symbol, unknown>)[marker] === true) return
-    // Only the two live presets exist; the legacy `tavern` row was removed
-    // because no session ever selected it and nothing binds it.
-    const hidden = new Set(['tavern-rp', 'tavern-novel'])
-    const original = presets.remoteExportList.bind(presets)
-    presets.remoteExportList = async () => {
-      const roster = await original()
-      return { ...roster, presets: roster.presets.filter(row => row.id === undefined || !hidden.has(row.id)) }
-    }
-    ;(presets as Record<symbol, unknown>)[marker] = true
+    this.ctx.inject(['agentPresets'], (scoped) => {
+      // The registry's own type is not part of this package's dependencies; the
+      // only member used is the roster read.
+      const presets = (scoped as unknown as {
+        agentPresets?: { remoteExportList?: () => Promise<{ presets: Array<{ id?: string }> }> }
+      }).agentPresets
+      if (presets?.remoteExportList === undefined) return
+      // Only the two live presets exist; the legacy `tavern` row was removed
+      // because no session ever selected it and nothing binds it.
+      const hidden = new Set(['tavern-rp', 'tavern-novel'])
+      scoped.effect(() => {
+        const base = presets.remoteExportList!.bind(presets)
+        presets.remoteExportList = async () => {
+          const roster = await base()
+          return { ...roster, presets: roster.presets.filter(row => row.id === undefined || !hidden.has(row.id)) }
+        }
+        return () => { delete (presets as { remoteExportList?: unknown }).remoteExportList }
+      }, 'dshtavern: preset roster filter')
+    })
   }
 
   private bindTavernPreset(): void {
@@ -935,6 +967,14 @@ export class TavernWorkspaceService extends Service {
           this.ctx.logger.warn(`[dshtavern] preset binding failed: ${String(error)}`)
         })
       }, 0)
+    })
+    // The caches below are keyed by session id. Without this listener a long
+    // process keeps one entry per session it ever saw, and a session id reused
+    // across a reload would inherit stale state.
+    this.ctx.on('agent/disposed', ({ agent }) => {
+      const id = String(agent.session.id)
+      this.tavernSessionCwd.delete(id)
+      this.pendingRegenerations.delete(id)
     })
   }
 
@@ -1357,6 +1397,10 @@ export class TavernWorkspaceService extends Service {
     maxReplyChars?: number,
     reasoningReserve?: number,
   ): Promise<{ text: string; usage?: TokenUsage; truncated: boolean }> {
+    // The loop's cancellation signal must reach every call this beat makes:
+    // one beat is several sequential requests, and without it a cancelled turn
+    // keeps spending tokens after the player has moved on.
+    if (options.signal?.aborted === true) throw new Error('tavern beat cancelled')
     const stream = this.ctx.llm.stream({
       provider: choice?.provider ?? options.provider,
       model: choice?.model ?? options.model,
@@ -1371,6 +1415,7 @@ export class TavernWorkspaceService extends Service {
         ? { reasoningEffort: ReasoningEffortId(choice.reasoningEffort) }
         : options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
       ...(maxReplyChars === undefined ? {} : { maxTokens: replyCapTokens(maxReplyChars, reasoningReserve) }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     let text = ''
     let usage: TokenUsage | undefined
@@ -1381,7 +1426,11 @@ export class TavernWorkspaceService extends Service {
       if (chunk.type === 'text-delta') text += chunk.text
       else if (chunk.type === 'usage') usage = chunk.usage
       else if (chunk.type === 'finish' && chunk.reason.kind === 'max-tokens') truncated = true
-      else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
+      else if (chunk.type === 'finish' && chunk.reason.kind === 'aborted') {
+        // A cancelled turn must not stage the partial text it collected: the
+        // player asked to abandon this beat, not to keep half of it.
+        throw new Error('tavern beat cancelled')
+      } else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
         throw new Error(`tavern model call failed: ${chunk.reason.failure.message}`)
       }
     }
@@ -1420,6 +1469,10 @@ export class TavernWorkspaceService extends Service {
    * `team:identity` from the globally installed agent-team plugin). That call
    * happens after both assembly and pre-step, so the only place to filter it is
    * the service method itself. The wrapper is inert outside tavern sessions.
+   *
+   * The service offers no per-assembly hook here, so this wraps the prototype
+   * method inside an effect: unloading the plugin must remove the wrapper, or a
+   * stale closure over a disposed context would throw on every later assembly.
    */
   private installRequiredContextFilter(): void {
     this.ctx.inject(['systemPrompt'], (scoped) => {
@@ -1427,22 +1480,28 @@ export class TavernWorkspaceService extends Service {
         refreshContext?: (assembly: unknown, context?: { agent?: Agent }) => { contexts: Array<{ name: string }> }
       }
       if (systemPrompt.refreshContext === undefined) return
-      // Always wrap the prototype method, never the previous wrapper: a stale
-      // wrapper from an earlier plugin revision captured a disposed context and
-      // would throw `inactive context` on every assembly.
       const prototype = Object.getPrototypeOf(systemPrompt) as {
         refreshContext: typeof systemPrompt.refreshContext
       }
-      const base = prototype.refreshContext
-      systemPrompt.refreshContext = (assembly, context) => {
-        const refreshed = base.call(systemPrompt, assembly, context)
-        const cwd = context?.agent?.session.header.cwd
-        if (cwd === undefined || !isTavernCwdSync(cwd)) return refreshed
-        return {
-          ...refreshed,
-          contexts: refreshed.contexts.filter(entry => entry.name === 'working-directory:current'),
+      scoped.effect(() => {
+        const base = prototype.refreshContext
+        const wrapper = (assembly: unknown, context?: { agent?: Agent }): { contexts: Array<{ name: string }> } => {
+          const refreshed = base.call(systemPrompt, assembly, context)
+          const cwd = context?.agent?.session.header.cwd
+          if (cwd === undefined || !isTavernCwdSync(cwd)) return refreshed
+          return {
+            ...refreshed,
+            contexts: refreshed.contexts.filter(entry => entry.name === 'working-directory:current'),
+          }
         }
-      }
+        systemPrompt.refreshContext = wrapper
+        return () => {
+          // The wrapper is an own property shadowing the prototype method, so
+          // deleting it restores the original behaviour. Only remove it while it
+          // is still the installed wrapper: another instance may have replaced it.
+          if (systemPrompt.refreshContext === wrapper) delete (systemPrompt as { refreshContext?: unknown }).refreshContext
+        }
+      }, 'dshtavern: required context filter')
     })
   }
 
@@ -1722,7 +1781,7 @@ export class TavernWorkspaceService extends Service {
         sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
         return
       }
-      const body = await readJsonObject(req)
+      const body = await readJsonObject(req, PROMPT_BODY_MAX_BYTES)
       const workspaceId = optionalString(body, 'workspaceId') ?? workspaceIdFromUrl(req)
       const scope = promptScopeFromBody(body) ?? queryScope
       sendJson(res, 200, {
@@ -1751,7 +1810,7 @@ export class TavernWorkspaceService extends Service {
         sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
         return
       }
-      const body = await readJsonObject(req)
+      const body = await readJsonObject(req, CARD_BODY_MAX_BYTES)
       const workspaceId = optionalString(body, 'workspaceId') ?? workspaceIdFromUrl(req)
       const action = optionalString(body, 'action') ?? 'create'
       const id = optionalString(body, 'id')
@@ -1797,7 +1856,7 @@ export class TavernWorkspaceService extends Service {
         sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
         return
       }
-      const body = await readJsonObject(req)
+      const body = await readJsonObject(req, CARD_BODY_MAX_BYTES)
       const workspaceId = optionalString(body, 'workspaceId')
       if (workspaceId === undefined) throw new CharacterCardInvalidError('缺少 workspaceId')
       const text = optionalString(body, 'text')
@@ -1822,7 +1881,7 @@ export class TavernWorkspaceService extends Service {
         sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
         return
       }
-      const body = await readJsonObject(req)
+      const body = await readJsonObject(req, WORLDBOOK_BODY_MAX_BYTES)
       const workspaceId = optionalString(body, 'workspaceId')
       if (workspaceId === undefined) throw new WorldbookInvalidError('缺少 workspaceId')
       const text = optionalString(body, 'text')
@@ -2503,6 +2562,7 @@ export class TavernWorkspaceService extends Service {
         ...await this.previewPrompt(workspaceIdFromUrl(req), {
           scope: url.searchParams.get('scope') === 'director' ? 'director' : 'character',
           ...(url.searchParams.get('cardId') === null ? {} : { cardId: url.searchParams.get('cardId')! }),
+          ...(url.searchParams.get('sessionId') === null ? {} : { sessionId: url.searchParams.get('sessionId')! }),
           sample: url.searchParams.get('sample') ?? '',
         }),
       })
@@ -2525,7 +2585,7 @@ export class TavernWorkspaceService extends Service {
         sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
         return
       }
-      const body = await readJsonObject(req)
+      const body = await readJsonObject(req, WORLDBOOK_BODY_MAX_BYTES)
       const workspaceId = optionalString(body, 'workspaceId') ?? workspaceIdFromUrl(req)
       sendJson(res, 200, { ok: true, ...await this.saveWorldbook(workspaceId, body.entries) })
     } catch (error) {
@@ -2574,6 +2634,10 @@ export class TavernWorkspaceService extends Service {
 
   /** Answer one failed tavern request with the closest status category. */
   private fail(res: ServerResponse, error: unknown): void {
+    if (error instanceof HttpRequestError) {
+      sendJson(res, error.status, { ok: false, error: error.message })
+      return
+    }
     const status = error instanceof TavernInputError
       || error instanceof PromptLayoutInvalidError
       || error instanceof PromptLayoutVersionError
@@ -2672,17 +2736,6 @@ type SpeakerSource = BeatTurn['speakerSource'] & string
  */
 function nextSeq(stage: readonly StageEntry[]): number {
   return stage.reduce((max, entry) => Math.max(max, entry.seq), 0) + 1
-}
-
-/**
- * One-line cast brief: the card's first line of description, else its tags.
- * @param card - cast member's card.
- * @returns a short identifying phrase.
- */
-function cardBrief(card: CharacterCard): string {
-  const firstLine = card.description.split('\n').map(line => line.trim()).find(line => line.length > 0)
-  if (firstLine !== undefined) return firstLine.slice(0, 60)
-  return card.tags.slice(0, 3).join(' · ') || '（无简介）'
 }
 
 /**
@@ -2893,34 +2946,27 @@ function isRuntimeContextMessage(message: unknown): boolean {
   })
 }
 
-/** Normalise a directory for prefix comparison (separators, trailing slash, case). */
-function normalizeDirectory(directory: string): string {
-  return directory.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase()
-}
-
 /**
- * Find the tavern workspace root containing a session cwd.
+ * Resolve the tavern root a session working directory names.
+ *
+ * Only the directory itself may carry the marker (D004): a session started in a
+ * subdirectory is an ordinary DSH session, not a tavern session. Ancestors are
+ * never consulted, so a tavern holding a nested project does not turn that
+ * project's sessions into tavern sessions.
  *
  * Deliberately independent of the Cordis service graph: section text providers
  * and service wrappers outlive a plugin revision (agents keep their closures),
  * so they must not touch a possibly-disposed context.
  * @param directory - session working directory.
- * @returns the tavern root, or undefined when the cwd is not inside one.
+ * @returns the tavern root, or undefined when the directory is not a tavern.
  */
 function tavernRootForCwd(directory: string | undefined): string | undefined {
   if (directory === undefined || directory.length === 0) return undefined
-  let current = directory
-  for (let depth = 0; depth < 4; depth += 1) {
-    try {
-      if (existsSync(join(current, TAVERN_DIRECTORY, MARKER_FILE))) return current
-    } catch {
-      return undefined
-    }
-    const parent = dirname(current)
-    if (parent === current) break
-    current = parent
+  try {
+    return existsSync(join(directory, TAVERN_DIRECTORY, MARKER_FILE)) ? directory : undefined
+  } catch {
+    return undefined
   }
-  return undefined
 }
 
 /** @param directory - session working directory. @returns whether it belongs to a tavern. */

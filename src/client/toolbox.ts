@@ -117,21 +117,30 @@ export function ensureTaverns(force = false): void {
 
 /**
  * Match a session working directory to a registered tavern workspace.
+ *
+ * The match is exact (D004): only a session whose cwd is the tavern directory
+ * itself is a tavern session. The host applies the same rule when it decides
+ * whether to intercept a request, so the toolbox never offers tools for a
+ * session the host would not orchestrate.
  * @param cwd - session working directory.
  * @param taverns - registered tavern workspaces.
- * @returns the tavern whose directory contains the cwd, or `null`.
+ * @returns the tavern whose directory is the cwd, or `null`.
  */
 export function matchTavernWorkspace(
   cwd: string | undefined,
   taverns: readonly TavernWorkspaceRef[],
 ): TavernWorkspaceRef | null {
   if (cwd === undefined || cwd.length === 0) return null
-  const normalized = cwd.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase()
+  const normalized = normalizeDirectory(cwd)
   for (const tavern of taverns) {
-    const root = tavern.workspacePath.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase()
-    if (normalized === root || normalized.startsWith(`${root}/`)) return tavern
+    if (normalized === normalizeDirectory(tavern.workspacePath)) return tavern
   }
   return null
+}
+
+/** Normalise a directory for comparison (separators, trailing slash, case). */
+function normalizeDirectory(directory: string): string {
+  return directory.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase()
 }
 
 /**
@@ -424,6 +433,7 @@ function ToolWindow(): ReactElement | null {
         workspaceId: station.workspaceId,
         workspaceTitle: station.workspaceTitle,
         workspacePath: station.workspacePath,
+        sessionId: station.sessionId,
       })
       : tool === 'agent'
         ? createElement(AgentPanel, {

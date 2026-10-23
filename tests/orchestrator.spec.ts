@@ -188,6 +188,40 @@ describe('director prompt', () => {
     })
     expect(character).not.toContain('杀手在门外')
   })
+
+  it('keeps director-only lore in its own block, separate from the world state', () => {
+    const secret = {
+      id: 's1', name: '月蚀封印', content: '三年前有人在此消失。',
+      keys: ['月蚀'], secondaryKeys: [], logic: 'and_any' as const, constant: false,
+      position: 'before' as const, order: 100, depth: 6, enabled: true,
+      caseSensitive: false, wholeWords: false, audience: 'director' as const,
+    }
+    const withLore = buildDirectorSystem({
+      world: { scene: '雨夜', facts: [], hidden: [] },
+      cast: [],
+      stage: [],
+      layout: defaultPromptLayout('director'),
+      worldbook: [secret],
+      playerInput: '是月蚀。',
+    })
+    expect(withLore).toContain('三年前有人在此消失')
+
+    const layout = defaultPromptLayout('director')
+    const withoutLore = buildDirectorSystem({
+      world: { scene: '雨夜', facts: [], hidden: [] },
+      cast: [],
+      stage: [],
+      layout: {
+        ...layout,
+        blocks: layout.blocks.map(block => block.id === 'director-lore' ? { ...block, enabled: false } : block),
+      },
+      worldbook: [secret],
+      playerInput: '是月蚀。',
+    })
+    // Disabling the lore block leaves the world state intact.
+    expect(withoutLore).not.toContain('三年前有人在此消失')
+    expect(withoutLore).toContain('雨夜')
+  })
 })
 
 describe('character prompt', () => {
@@ -277,6 +311,60 @@ describe('character prompt', () => {
   it('passes the beat narration and the player words to the character', () => {
     expect(buildCharacterMessage('雨更大了。', '我推开门。')).toBe('【旁白】雨更大了。\n\n【玩家】我推开门。')
     expect(buildCharacterMessage('', '我推开门。')).toBe('【玩家】我推开门。')
+  })
+
+  it('renders the stage, lore tail, and duty text through the layout', () => {
+    const system = buildCharacterSystem({
+      layout: defaultPromptLayout(),
+      card: card(),
+      stage: [{ seq: 1, at: '', kind: 'narration', text: '雨停了。', scope: 'observable' }],
+    })
+    expect(system).toContain('雨停了。')
+    // The duty block names the character through the placeholder substitution.
+    expect(system).toContain('你现在就是「月见」')
+  })
+
+  it('lets the layout disable the stage and duty blocks', () => {
+    const layout = defaultPromptLayout()
+    const blocks = layout.blocks.map(block => block.id === 'character-stage' || block.id === 'character-duty'
+      ? { ...block, enabled: false }
+      : block)
+    const system = buildCharacterSystem({
+      layout: { ...layout, blocks },
+      card: card(),
+      stage: [{ seq: 1, at: '', kind: 'narration', text: '雨停了。', scope: 'observable' }],
+    })
+    expect(system).not.toContain('你现在就是')
+  })
+
+  it('keeps a tail-position lore entry in the layout-controlled block', () => {
+    const tailEntry = {
+      id: 'tail-1', name: '夜巡规则', content: '午夜后不许开窗。',
+      keys: ['午夜'], secondaryKeys: [], logic: 'and_any' as const, constant: false,
+      position: 'tail' as const, order: 100, depth: 6, enabled: true,
+      caseSensitive: false, wholeWords: false, audience: 'all' as const,
+    }
+    const withTail = buildCharacterSystem({
+      layout: defaultPromptLayout(),
+      card: card(),
+      stage: [],
+      worldbook: [tailEntry],
+      playerInput: '午夜到了。',
+    })
+    expect(withTail).toContain('午夜后不许开窗')
+
+    const layout = defaultPromptLayout()
+    const withoutTail = buildCharacterSystem({
+      layout: {
+        ...layout,
+        blocks: layout.blocks.map(block => block.id === 'lore-tail' ? { ...block, enabled: false } : block),
+      },
+      card: card(),
+      stage: [],
+      worldbook: [tailEntry],
+      playerInput: '午夜到了。',
+    })
+    expect(withoutTail).not.toContain('午夜后不许开窗')
   })
 })
 

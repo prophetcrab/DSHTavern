@@ -13,8 +13,9 @@ import type { CharacterCard } from './character-card.js'
 import {
   buildCharacterSystem,
   buildDirectorSystem,
+  cardBrief,
 } from './orchestrator.js'
-import type { CastMember } from './orchestrator.js'
+import type { BeatLimits, CastMember } from './orchestrator.js'
 import type { PromptLayout, PromptScope } from './prompt-layout.js'
 import type { StageEntry, WorldState } from './stage.js'
 import { activateEntries, fromCardEntries, stageScanLines } from './worldbook.js'
@@ -67,6 +68,8 @@ export interface PreviewInput {
   readonly sample?: string
   /** Director-owned world state, used only by the director scope. */
   readonly world?: WorldState
+  /** Runtime knobs, so the preview carries the same history and lore as a beat. */
+  readonly limits?: BeatLimits
 }
 
 /**
@@ -82,7 +85,7 @@ export function buildPreview(input: PreviewInput): PromptPreview {
     const cast: CastMember[] = input.cards.map(card => ({
       id: card.id,
       name: card.name,
-      brief: '（预览）',
+      brief: cardBrief(card),
     }))
     const system = buildDirectorSystem({
       world: input.world ?? { scene: '', facts: [], hidden: [] },
@@ -91,12 +94,15 @@ export function buildPreview(input: PreviewInput): PromptPreview {
       layout: input.layout,
       worldbook: input.worldbook,
       playerInput: sample,
+      ...(input.limits === undefined ? {} : { limits: input.limits }),
     })
     const lore = activateEntries({
       entries: input.worldbook,
       scanText: sample,
       recentLines: stageScanLines(sampleStage(sample)),
       audience: 'director',
+      ...(input.limits?.loreMaxEntries === undefined ? {} : { maxEntries: input.limits.loreMaxEntries }),
+      ...(input.limits?.loreMaxChars === undefined ? {} : { maxChars: input.limits.loreMaxChars }),
     })
     return {
       scope: 'director',
@@ -121,12 +127,15 @@ export function buildPreview(input: PreviewInput): PromptPreview {
     stage: sampleStage(sample),
     worldbook: entries,
     playerInput: sample,
+    ...(input.limits === undefined ? {} : { limits: input.limits }),
   })
   const lore = activateEntries({
     entries,
     scanText: sample,
     recentLines: stageScanLines(sampleStage(sample)),
     audience: 'character',
+    ...(input.limits?.loreMaxEntries === undefined ? {} : { maxEntries: input.limits.loreMaxEntries }),
+    ...(input.limits?.loreMaxChars === undefined ? {} : { maxChars: input.limits.loreMaxChars }),
   })
   const activated = [...lore.before, ...lore.after, ...lore.tail]
   return {

@@ -121,6 +121,19 @@ describe('mentionedSpeaker', () => {
   it('ignores an empty utterance', () => {
     expect(mentionedSpeaker('', CAST)).toBeUndefined()
   })
+
+  it('does not match a Latin name inside a longer word', () => {
+    const cast = [{ id: 'x', name: 'Ann', brief: '' }]
+    expect(mentionedSpeaker('Annex closed', cast)).toBeUndefined()
+    expect(mentionedSpeaker('ask Ann first', cast)?.name).toBe('Ann')
+  })
+
+  it('matches a CJK name that runs directly into the next word', () => {
+    // Chinese has no spaces, so requiring a CJK boundary would miss the common
+    // "林见夏在车上" form.
+    const cast = [{ id: 'x', name: '林见夏', brief: '' }]
+    expect(mentionedSpeaker('林见夏在车上', cast)?.name).toBe('林见夏')
+  })
 })
 
 describe('reply budgets', () => {

@@ -14,7 +14,7 @@ import type { CharacterCard } from './character-card.js'
 import type { PromptLayout } from './prompt-layout.js'
 import { promptBlockViews, renderPromptText } from './prompt-layout.js'
 import type { StageEntry, WorldState } from './stage.js'
-import { activateEntries, renderLore, stageScanLines } from './worldbook.js'
+import { activateEntries, renderLore, stageScanLines, wholeWordIndex } from './worldbook.js'
 import type { WorldbookEntry } from './worldbook.js'
 import { WORLDBOOK_ACTIVE_CHARS_MAX, WORLDBOOK_ACTIVE_MAX, WORLDBOOK_SCAN_LINES } from './worldbook.js'
 import { renderStage } from './stage.js'
@@ -27,6 +27,20 @@ export interface CastMember {
   readonly name: string
   /** One-line role summary for the roster. */
   readonly brief: string
+}
+
+/**
+ * One-line cast brief: the card's first line of description, else its tags.
+ *
+ * The director only needs enough to decide who reacts; the full card would
+ * leak the character's private definition into the director prompt.
+ * @param card - cast member's card.
+ * @returns a short identifying phrase.
+ */
+export function cardBrief(card: CharacterCard): string {
+  const firstLine = card.description.split('\n').map(line => line.trim()).find(line => line.length > 0)
+  if (firstLine !== undefined) return firstLine.slice(0, 60)
+  return card.tags.slice(0, 3).join(' · ') || '（无简介）'
 }
 
 /** What the director decided for one beat. */
@@ -268,7 +282,8 @@ function directorScaffold(input: DirectorPromptInput): {
   const loreText = renderLore([...lore.before, ...lore.after, ...lore.tail])
   const state = new Map<string, string>([
     ['director-roster', roster],
-    ['director-world', [renderWorld(input.world), loreText].filter(part => part.length > 0).join('\n')],
+    ['director-world', renderWorld(input.world)],
+    ['director-lore', loreText],
     ['director-stage', transcript],
   ])
   const { body, format } = directorPromptParts(input, state)
@@ -393,9 +408,6 @@ export function buildCharacterSystem(input: {
 }): string {
   const limits = limitsOf(input.limits)
   const contextText = renderStage(tailWithinChars(input.stage, limits.stageWindow, limits.stageMaxChars))
-  const triggerText = [contextText, input.narration ?? '', input.playerInput ?? '']
-    .filter(part => part.length > 0)
-    .join('\n')
   const lore = activateEntries({
     entries: input.worldbook ?? [],
     scanText: [input.narration ?? '', input.playerInput ?? ''].join('\n'),
@@ -407,24 +419,12 @@ export function buildCharacterSystem(input: {
   const views = promptBlockViews(input.layout).map((view) => {
     if (view.id === 'worldbook-before') return { ...view, content: renderLore(lore.before) }
     if (view.id === 'worldbook-after') return { ...view, content: renderLore(lore.after) }
-    const injected = cardContent(view.id, input.card, triggerText)
+    if (view.id === 'lore-tail') return { ...view, content: renderLore(lore.tail) }
+    if (view.id === 'character-stage') return { ...view, content: contextText || '（剧情尚未开始）' }
+    const injected = cardContent(view.id, input.card)
     return injected === undefined ? view : { ...view, content: injected }
   })
-  const rendered = renderPromptText(views, { char: input.card.name, user: '玩家' })
-  const transcript = contextText || '（剧情尚未开始）'
-  const tail = renderLore(lore.tail)
-  return [
-    rendered,
-    ...tail.length === 0 ? [] : ['', '# 现在需要注意', tail],
-    '',
-    '# 舞台记录',
-    transcript,
-    '',
-    '# 你的职责',
-    `你现在就是「${input.card.name}」。只输出 ${input.card.name} 自己的台词和这个角色自己的动作与神态。`,
-    '不要旁白他人，不要替玩家说话，不要描写其他角色的内心，不要跳出角色。',
-    '动作与神态用星号包裹，例如：*她把伞往旁边挪了挪*。',
-  ].join('\n')
+  return renderPromptText(views, { char: input.card.name, user: '玩家' })
 }
 
 /**
@@ -595,8 +595,9 @@ export function resolveSpeaker(
 /**
  * Find the cast member the player addressed by name.
  *
- * A name counts only as a whole token: a two-character name that happens to be
- * a substring of an unrelated word would otherwise hijack every beat. When the
+ * A Latin name counts only as a whole token, so "Ann" does not match "Annex".
+ * Chinese prose has no spaces and a name often abuts a verb ("林见夏在车上"),
+ * so CJK characters do not bind: a CJK name matches as a substring. When the
  * player names several characters, the earliest mention wins.
  * @param playerInput - the player's utterance.
  * @param cast - cast roster.
@@ -608,7 +609,7 @@ export function mentionedSpeaker(
 ): CastMember | undefined {
   let best: { member: CastMember; at: number } | undefined
   for (const member of cast) {
-    const at = playerInput.indexOf(member.name)
+    const at = wholeWordIndex(playerInput, member.name, { caseSensitive: true, cjkWords: false })
     if (at === -1) continue
     if (best === undefined || at < best.at) best = { member, at }
   }
@@ -622,18 +623,19 @@ const CARD_BLOCKS = new Set([
   'character-scenario',
   'character-system',
   'examples',
-  'worldbook-before',
-  'worldbook-after',
 ])
 
 /**
  * Content a character-sourced block contributes for one card.
+ *
+ * The worldbook blocks are filled from {@link activateEntries} instead: the
+ * card's own entries are converted to worldbook entries by the caller, so both
+ * sources match through one engine.
  * @param id - catalogue block id.
  * @param card - active card.
- * @param contextText - recent observable text used to trigger keyed lore entries.
  * @returns the block text, or `undefined` when the block is not card-sourced.
  */
-function cardContent(id: string, card: CharacterCard, contextText: string): string | undefined {
+function cardContent(id: string, card: CharacterCard): string | undefined {
   if (!CARD_BLOCKS.has(id)) return undefined
   switch (id) {
     case 'character-description': return card.description
@@ -641,31 +643,8 @@ function cardContent(id: string, card: CharacterCard, contextText: string): stri
     case 'character-scenario': return card.scenario
     case 'character-system': return card.systemPrompt
     case 'examples': return card.exampleDialogues
-    case 'worldbook-before': return loreText(card, 'before', contextText)
-    case 'worldbook-after': return loreText(card, 'after', contextText)
     default: return undefined
   }
-}
-
-/**
- * Render a card's lore entries for one insertion position.
- *
- * Constant entries always fire; keyed entries fire when one of their keys
- * appears in the recent observable text.
- * @param card - active card.
- * @param position - insertion position relative to the character definition.
- * @param contextText - recent observable text.
- * @returns joined entry contents.
- */
-function loreText(card: CharacterCard, position: 'before' | 'after', contextText: string): string {
-  const haystack = contextText.toLowerCase()
-  return card.entries
-    .filter(entry => entry.enabled && entry.position === position)
-    .filter(entry => entry.constant || entry.keys.length === 0
-      || entry.keys.some(key => key.length > 0 && haystack.includes(key.toLowerCase())))
-    .map(entry => entry.content.trim())
-    .filter(text => text.length > 0)
-    .join('\n\n')
 }
 
 /**

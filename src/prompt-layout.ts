@@ -11,8 +11,15 @@ import { readFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-/** Layout file schema version this build reads and writes. */
-export const PROMPT_LAYOUT_SCHEMA = 1
+/**
+ * Layout file schema version this build reads and writes.
+ *
+ * Version 2 added the `lore-tail`, `character-stage`, and `character-duty`
+ * character blocks. A version-1 file lists only the original catalogue, so
+ * reading one fills the new blocks in at their catalogue positions; a version-2
+ * file is not readable by a version-1 build, which rejects unknown ids.
+ */
+export const PROMPT_LAYOUT_SCHEMA = 2
 
 /** Workspace directory owning prompt files. */
 export const PROMPT_DIRECTORY = 'prompts'
@@ -219,6 +226,35 @@ export const PROMPT_BLOCKS: readonly PromptBlockDefinition[] = [
     defaultContent: '保持 {{char}} 的角色设定与说话风格；不要跳出角色，不要总结或解释。',
   },
   {
+    id: 'lore-tail',
+    appliesTo: 'character',
+    label: '世界书（尾部）',
+    source: 'worldbook',
+    description: '关键词命中且插入位置为「末尾」的设定；默认排在角色定义之后、舞台记录之前',
+    editable: false,
+    defaultContent: '',
+  },
+  {
+    id: 'character-stage',
+    appliesTo: 'character',
+    label: '舞台记录',
+    source: 'state',
+    description: '这个角色能看到的旁白与台词（运行时填入）',
+    editable: false,
+    defaultContent: '',
+  },
+  {
+    id: 'character-duty',
+    appliesTo: 'character',
+    label: '角色职责',
+    source: 'template',
+    description: '只输出自己的台词与动作、不越界的最后一条指令',
+    editable: true,
+    defaultContent: '你现在就是「{{char}}」。只输出 {{char}} 自己的台词和这个角色自己的动作与神态。\n'
+      + '不要旁白他人，不要替玩家说话，不要描写其他角色的内心，不要跳出角色。\n'
+      + '动作与神态用星号包裹，例如：*她把伞往旁边挪了挪*。',
+  },
+  {
     id: 'dsh-runtime',
     appliesTo: 'character',
     label: 'DSH 运行时上下文',
@@ -265,6 +301,15 @@ export const DIRECTOR_BLOCKS: readonly PromptBlockDefinition[] = [
     label: '世界状态',
     source: 'state',
     description: '场景、已确立的事实、尚未揭示的剧情（运行时填入，角色看不到）',
+    editable: false,
+    defaultContent: '',
+  },
+  {
+    id: 'director-lore',
+    appliesTo: 'director',
+    label: '导演世界书',
+    source: 'worldbook',
+    description: '命中关键词且仅导演可见的世界书条目（运行时填入）',
     editable: false,
     defaultContent: '',
   },
@@ -411,6 +456,36 @@ export function renderPromptText(
     .filter(text => text.length > 0)
     .map(text => text.replace(/\{\{char\}\}/gi, char).replace(/\{\{user\}\}/gi, user))
     .join('\n\n')
+}
+
+/**
+ * Fill blocks a stored layout predates, keeping the order the user chose.
+ *
+ * A stored layout is a full ordering of the catalogue it was written against.
+ * When the catalogue grows, the new ids have no slot; inserting each one where
+ * it sits in the catalogue default keeps the author's relative order intact
+ * and gives the new blocks their enabled default.
+ * @param stored - validated blocks from the file, in their stored order.
+ * @param scope - catalogue the blocks belong to.
+ * @returns a full ordering of the current catalogue.
+ */
+export function mergeCatalogueBlocks(
+  stored: readonly PromptBlockState[],
+  scope: PromptScope = 'character',
+): PromptBlockState[] {
+  const catalogue = blockIdsFor(scope)
+  const rank = new Map(catalogue.map((id, index) => [id, index]))
+  const merged = stored.map(block => ({ ...block }))
+  for (const id of catalogue) {
+    if (merged.some(block => block.id === id)) continue
+    const position = rank.get(id) ?? 0
+    // Insert before the first stored block that follows it in the catalogue, so
+    // the author's order survives and the new block lands where the default
+    // catalogue puts it.
+    const insertAt = merged.findIndex(block => (rank.get(block.id) ?? 0) > position)
+    merged.splice(insertAt === -1 ? merged.length : insertAt, 0, { id, enabled: true })
+  }
+  return merged
 }
 
 /**
@@ -564,14 +639,61 @@ export function parsePromptLayoutText(text: string, path: string, scope: PromptS
     throw new PromptLayoutInvalidError(`prompt layout at '${path}' must be a JSON object`)
   }
   const record = value as Record<string, unknown>
-  const schema = typeof record.schema === 'number' ? record.schema : PROMPT_LAYOUT_SCHEMA
+  // An absent version is the oldest one: only this plugin writes the field, so
+  // a file without it is a hand-edit or a layout from before versioning, and
+  // both should gain newly added blocks instead of being rejected as incomplete.
+  const schema = typeof record.schema === 'number' ? record.schema : 1
   if (schema > PROMPT_LAYOUT_SCHEMA) throw new PromptLayoutVersionError(path, schema)
-  const blocks = normalizePromptBlocks(record.blocks, scope)
+  const blocks = schema < PROMPT_LAYOUT_SCHEMA
+    ? mergeCatalogueBlocks(normalizeLegacyBlocks(record.blocks, scope), scope)
+    : normalizePromptBlocks(record.blocks, scope)
   return {
     schema: PROMPT_LAYOUT_SCHEMA,
     blocks,
     ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}),
   }
+}
+
+/**
+ * Validate a layout written by an earlier schema.
+ *
+ * An older file is a full ordering of the catalogue it was written against, so
+ * it can only be checked for shape and duplication; the missing blocks are
+ * filled in by {@link mergeCatalogueBlocks}.
+ * @param value - candidate block list, however malformed.
+ * @param scope - which catalogue the list belongs to.
+ * @returns the stored entries, in order.
+ * @throws PromptLayoutInvalidError when the list repeats or invents blocks.
+ */
+function normalizeLegacyBlocks(value: unknown, scope: PromptScope): PromptBlockState[] {
+  if (!Array.isArray(value)) {
+    throw new PromptLayoutInvalidError('prompt blocks must be an array')
+  }
+  const known = new Set(blockIdsFor(scope))
+  const seen = new Set<string>()
+  const blocks: PromptBlockState[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new PromptLayoutInvalidError('every prompt block must be an object')
+    }
+    const record = entry as Record<string, unknown>
+    const id = record.id
+    if (typeof id !== 'string' || !known.has(id)) {
+      throw new PromptLayoutInvalidError(`unknown prompt block '${String(id)}'`)
+    }
+    if (seen.has(id)) throw new PromptLayoutInvalidError(`duplicate prompt block '${id}'`)
+    seen.add(id)
+    const content = record.content
+    if (content !== undefined && typeof content !== 'string') {
+      throw new PromptLayoutInvalidError(`prompt block '${id}' content must be a string`)
+    }
+    blocks.push({
+      id,
+      enabled: record.enabled !== false,
+      ...(typeof content === 'string' ? { content } : {}),
+    })
+  }
+  return blocks
 }
 
 /**

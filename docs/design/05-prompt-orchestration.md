@@ -7,7 +7,7 @@
 ## 已实现（v0.3）
 
 - **A 路线装配**：profile 新增 `preset-tavern`（`@deepseek-ai/dsh-agent-preset`，唯一插件行 `dshtavern/session`）。会话行在 `agent/created` 时给该 agent 注册 `complete` PromptSection 并 `suppressRuntimeContext()`；每次 `agent/pre-step` 通过 `ctx.tavernWorkspaces.assemblePromptText(sessionCwd)` 刷新文本，因此编辑后下一条消息即生效。只读取 cwd 所属酒馆工作区的 `prompts/prompt.json`，不混入全局或其他工作区内容（D005）；DSH required 的 cwd 上下文保留。
-- 宿主：`src/prompt-layout.ts` 提供系统提示词块目录（12 块）、默认顺序、校验与按工作区持久化（`<workspace>/prompts/prompt.json`）；`renderPromptText()` 把启用且非空的块按顺序拼成 system prompt；`assemblePromptText(cwd)` 负责目录 → 酒馆工作区 → 文本。
+- 宿主：`src/prompt-layout.ts` 提供系统提示词块目录（角色 15 块 / 导演 8 块）、默认顺序、校验与按工作区持久化（`<workspace>/prompts/prompt.json`）；`renderPromptText()` 把启用且非空的块按顺序拼成 system prompt；`assemblePromptText(cwd)` 负责目录 → 酒馆工作区 → 文本。
 - 接口：`GET /tavern/prompt?workspaceId=…` 读取顺序，`POST /tavern/prompt` 保存顺序 / 文本 / `{reset:true}` 恢复默认。
 - **位置：酒馆会话里可拖动的悬浮工具箱图标**。一个圆形图标悬浮在会话上（位置可拖动并记住，默认在输入框左下侧空档）；点击后弹出只含工具图标的浮层，再点「提示词编排」才在居中的**子弹窗**里打开编排页面（背景点击 / 关闭按钮 / Esc 关闭）。
 - 编排页：可拖拽卡片调整顺序、启停、恢复默认、保存状态提示；选择工作区由当前会话决定。

@@ -436,25 +436,61 @@ function hitsAny(keys: readonly string[], haystack: string, entry: WorldbookEntr
 
 /** Whether one key occurs in the haystack under the entry's matching rules. */
 function keyHits(key: string, haystack: string, entry: WorldbookEntry): boolean {
-  const needle = entry.caseSensitive ? key : key.toLowerCase()
-  const subject = entry.caseSensitive ? haystack : haystack.toLowerCase()
-  if (!entry.wholeWords) return subject.includes(needle)
-  // Word boundaries are approximated for CJK by requiring the neighbouring
-  // character not to be alphanumeric, which keeps "伞" from matching "雨伞架"
-  // only when the author asks for whole words.
-  let from = 0
-  while (true) {
-    const index = subject.indexOf(needle, from)
-    if (index === -1) return false
-    const before = subject[index - 1]
-    const after = subject[index + needle.length]
-    if (!isWordChar(before) && !isWordChar(after)) return true
-    from = index + 1
+  if (!entry.wholeWords) {
+    const needle = entry.caseSensitive ? key : key.toLowerCase()
+    const subject = entry.caseSensitive ? haystack : haystack.toLowerCase()
+    return subject.includes(needle)
   }
+  return wholeWordIndex(haystack, key, { caseSensitive: entry.caseSensitive, cjkWords: true }) !== -1
 }
 
-function isWordChar(char: string | undefined): boolean {
-  return char !== undefined && /[A-Za-z0-9]/.test(char)
+/** Options for {@link wholeWordIndex}. */
+export interface WholeWordOptions {
+  /** Whether the comparison keeps case. */
+  readonly caseSensitive: boolean
+  /**
+   * Whether CJK characters count as word characters.
+   *
+   * Worldbook keys are explicit author choices, so an entry asking for whole
+   * words means "伞 must not fire inside 雨伞架". Mention detection runs over
+   * running prose where a name directly abuts a verb, so it leaves this off.
+   */
+  readonly cjkWords: boolean
+}
+
+/**
+ * First occurrence of `needle` that has no word-character neighbour.
+ *
+ * Word characters are ASCII letters and digits, plus CJK ideographs, kana, and
+ * hangul when {@link WholeWordOptions.cjkWords} is set. This is an
+ * approximation: it does not know the language's segmentation, only that two
+ * letters written together belong to one word.
+ * @param subject - text to search.
+ * @param needle - text to find.
+ * @param options - case folding and whether CJK binds.
+ * @returns the first boundary-respecting index, or -1 when none matches.
+ */
+export function wholeWordIndex(subject: string, needle: string, options: WholeWordOptions): number {
+  if (needle.length === 0) return -1
+  const wanted = options.caseSensitive ? needle : needle.toLowerCase()
+  const haystack = options.caseSensitive ? subject : subject.toLowerCase()
+  let from = 0
+  while (from <= haystack.length) {
+    const index = haystack.indexOf(wanted, from)
+    if (index === -1) return -1
+    const before = haystack[index - 1]
+    const after = haystack[index + wanted.length]
+    if (!isWordChar(before, options.cjkWords) && !isWordChar(after, options.cjkWords)) return index
+    from = index + 1
+  }
+  return -1
+}
+
+/** Whether one character binds to its neighbour inside a word. */
+function isWordChar(char: string | undefined, cjkWords: boolean): boolean {
+  if (char === undefined) return false
+  if (/[A-Za-z0-9]/.test(char)) return true
+  return cjkWords && /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(char)
 }
 
 function text(value: unknown, field: string, path?: string): string {

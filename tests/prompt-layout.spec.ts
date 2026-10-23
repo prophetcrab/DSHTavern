@@ -189,4 +189,27 @@ describe('prompt layout files', () => {
     await writeFile(path, JSON.stringify({ schema: 99, blocks: [] }), 'utf8')
     await expect(readPromptLayout(workspace)).rejects.toBeInstanceOf(PromptLayoutVersionError)
   })
+
+  it('fills blocks a version-1 layout predates without losing the stored order', async () => {
+    const workspace = await temporaryRoot()
+    const path = promptLayoutPath(workspace)
+    await mkdir(join(workspace, 'prompts'), { recursive: true })
+    // The version-1 catalogue had no lore-tail / character-stage / character-duty.
+    const legacy = PROMPT_BLOCK_IDS
+      .filter(id => id !== 'lore-tail' && id !== 'character-stage' && id !== 'character-duty')
+      .reverse()
+      .map((id, index) => ({ id, enabled: index !== 0 }))
+    await writeFile(path, JSON.stringify({ schema: 1, blocks: legacy }), 'utf8')
+
+    const layout = await readPromptLayout(workspace)
+    expect(layout.schema).toBe(PROMPT_LAYOUT_SCHEMA)
+    // Every current block is present exactly once.
+    expect([...layout.blocks.map(block => block.id)].sort()).toEqual([...PROMPT_BLOCK_IDS].sort())
+    // The stored relative order survives: the first stored block still comes
+    // before the second one.
+    const storedOrder = layout.blocks.map(block => block.id).filter(id => legacy.some(item => item.id === id))
+    expect(storedOrder).toEqual(legacy.map(item => item.id))
+    // A block the file predates takes the catalogue default: enabled.
+    expect(layout.blocks.find(block => block.id === 'character-stage')?.enabled).toBe(true)
+  })
 })

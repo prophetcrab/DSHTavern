@@ -161,10 +161,14 @@ describe('tavern workspace service prompt layout', () => {
     await ensureMarker(directory, 'test')
     const { service } = await mount([{ id: 'w1', path: directory, title: 'test' }])
 
-    const blocks = [...PROMPT_BLOCK_IDS].reverse().map((id, index) => ({ id, enabled: index % 2 === 0 }))
+    const blocks = [...PROMPT_BLOCK_IDS].reverse()
+      .map((id, index) => ({ id, enabled: index % 2 === 0 }))
     const saved = await service.savePromptLayout('w1', { blocks })
     expect(saved.blocks.map(block => block.id)).toEqual([...PROMPT_BLOCK_IDS].reverse())
-    expect(saved.blocks.find(block => block.id === PROMPT_BLOCK_IDS[0])?.enabled).toBe(false)
+    // Compare against the submitted flags instead of a hardcoded index: growing
+    // the catalogue shifts every reversed position.
+    const submitted = new Map(blocks.map(block => [block.id, block.enabled]))
+    expect(saved.blocks.every(block => block.enabled === submitted.get(block.id))).toBe(true)
     expect(saved.savedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
 
     const stored = JSON.parse(await readFile(promptLayoutPath(directory), 'utf8')) as {
@@ -291,6 +295,45 @@ describe('prompt layout HTTP route', () => {
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.body)).toMatchObject({ ok: false, error: 'forbidden' })
   })
+
+  it('accepts a body larger than the generic route ceiling when the document allows it', async () => {
+    // The prompt layout stores edited block text up to 512 KiB, so the route's
+    // ceiling must follow the document rather than a plugin-wide default. Two
+    // blocks of 40 KiB each stay under the per-block limit (64 KiB) while the
+    // whole body exceeds the old 64 KiB route ceiling.
+    const { routes } = await tavern()
+    const route = routes.get('/tavern/prompt')!
+    const tall = 'x'.repeat(40 * 1024)
+    const blocks = PROMPT_BLOCK_IDS.map(id => ({
+      id,
+      enabled: true,
+      ...(id === 'main-template' || id === 'user-persona' ? { content: tall } : {}),
+    }))
+    const post = await call(route, 'POST', '/tavern/prompt', JSON.stringify({ workspaceId: 'w1', blocks }))
+    expect(post.status).toBe(200)
+    expect(post.payload.ok).toBe(true)
+  })
+
+  it('answers 400 for a body that is not a JSON object', async () => {
+    const { routes } = await tavern()
+    const route = routes.get('/tavern/prompt')!
+    const result = await call(route, 'POST', '/tavern/prompt', '[1,2,3]')
+    expect(result.status).toBe(400)
+    expect(result.payload.ok).toBe(false)
+  })
+
+  it('answers 413 for a body past the route ceiling instead of resetting the socket', async () => {
+    const { routes } = await tavern()
+    const route = routes.get('/tavern/prompt')!
+    // The agent route keeps the 1 MiB default; this exceeds it.
+    const agentRoute = routes.get('/tavern/agent')!
+    const huge = JSON.stringify({ workspaceId: 'w1', config: { pad: 'x'.repeat(2 * 1024 * 1024) } })
+    const result = await call(agentRoute, 'POST', '/tavern/agent', huge)
+    expect(result.status).toBe(413)
+    expect(result.payload.ok).toBe(false)
+    // The route still answers afterwards: the request was drained, not severed.
+    expect((await call(route, 'GET', '/tavern/prompt?workspaceId=w1')).status).toBe(200)
+  })
 })
 
 describe('tavern preset auto-binding (D005)', () => {
@@ -356,7 +399,8 @@ describe('workspace prompt assembly (D005)', () => {
     expect(text).toContain('你 是一个普通旅人')
     expect(text).toContain('不要跳出角色')
     expect(await service.assemblePromptText(outside)).toBeUndefined()
-    expect(await service.assemblePromptText(join(directory, 'characters'))).toBe(text)
+    // D004: a subdirectory is not a tavern session, so it gets no workspace prompt.
+    expect(await service.assemblePromptText(join(directory, 'characters'))).toBeUndefined()
 
     const blocks = PROMPT_BLOCK_IDS.map(id => ({ id, enabled: id !== 'user-persona' }))
     await service.savePromptLayout('w1', { blocks })
