@@ -139,3 +139,10 @@ error: profile "desktop" is managed exclusively by the Electron application
 - **角色卡格式**：只认原生 `.charc`，SillyTavern 的 PNG / V2 JSON 卡需先转换。
 - **只能重生成最新一幕**：更早的回合要连同其后所有回合一起回退，而只追加的转写无法表达。
 - **缓存命中率偏低**：导演与角色提示词里，会变化的世界状态和舞台记录紧接在静态前缀之后，缓存只能复用到断点。这是当前提示词结构的直接结果。
+
+## 许可证
+
+[MIT](LICENSE)。
+
+`samples/characters/upstream/` 下的示例角色卡来自 [teknium1/character-cards](https://github.com/teknium1/character-cards)，版权归原作者，不适用本项目的许可证；详见该目录的 [README](samples/characters/README.md)。
+
