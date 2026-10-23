@@ -481,7 +481,9 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
       createElement('div', { className: 'dshtavern-tracker-group-note' },
         '回顾在后台独立运行，不占用本回合的模型调用。每次都会把从开场到现在的完整剧情读一遍，重写成一份当前状态的摘要。'),
 
-      createElement('div', { className: 'dshtavern-tracker-row dshtavern-tracker-row-toggle' },
+      // A label, not a div: the visible switch is 34×20 px, so the row text has
+      // to be part of the hit target or the control reads as unclickable.
+      createElement('label', { className: 'dshtavern-tracker-row dshtavern-tracker-row-toggle' },
         createElement('span', { className: 'dshtavern-tracker-row-text' },
           createElement('span', { className: 'dshtavern-tracker-label' }, '启用自动回顾'),
           createElement('span', { className: 'dshtavern-tracker-hint' }, '关闭后只在手动点「立即回顾」时运行。')),
