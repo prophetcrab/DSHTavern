@@ -332,7 +332,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
 
   return createElement('section', { className: 'dshtavern-tracker' },
     // ---- Status ---------------------------------------------------------
-    createElement('div', { className: 'dshtavern-tracker-status' },
+    createElement('div', { className: 'dshtavern-tracker-card dshtavern-tracker-status' },
       createElement('div', { className: 'dshtavern-tracker-status-main' },
         createElement('span', {
           className: 'dshtavern-tracker-dot',
@@ -444,9 +444,9 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
         }, '保存'))),
 
     // ---- Ledgers --------------------------------------------------------
-    createElement('div', { className: 'dshtavern-tracker-group' },
-      createElement('div', { className: 'dshtavern-tracker-group-head' },
-        createElement('div', { className: 'dshtavern-tracker-group-title' }, '追踪记录'),
+    createElement('div', { className: 'dshtavern-tracker-records' },
+      createElement('div', { className: 'dshtavern-tracker-head' },
+        createElement('div', { className: 'dshtavern-tracker-title' }, '追踪记录'),
         createElement('span', { className: 'dshtavern-tracker-hint' },
           current === undefined || current.newestTurn === 0
             ? '还没有剧情'
