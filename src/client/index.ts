@@ -59,19 +59,16 @@ export interface TavernView {
   readonly marker: TavernMarkerView
 }
 
-/** One registered workspace and whether it carries a tavern marker. */
-export interface WorkspaceView {
-  readonly id: string
-  readonly path: string
-  readonly title: string
-  readonly tavern: boolean
-}
-
-/** The panel's read model, served by `GET /tavern/state`. */
+/**
+ * The panel's read model, served by `GET /tavern/state`.
+ *
+ * `workspaces` is still served, for callers that want to know which registered
+ * directories are not taverns; the panel itself only renders the tavern list.
+ */
 export interface Overview {
   readonly defaultRoot: string
   readonly taverns: readonly TavernView[]
-  readonly workspaces: readonly WorkspaceView[]
+  readonly workspaces: readonly { readonly id: string; readonly path: string; readonly title: string; readonly tavern: boolean }[]
 }
 
 /**
@@ -126,7 +123,6 @@ export interface PanelViewProps {
   onModeChange: (value: TavernModeView) => void
   onCreate: () => void
   onRefresh: () => void
-  onAdopt: (workspaceId: string) => void
   onRequestUntag: (workspaceId: string) => void
   onConfirmUntag: (workspaceId: string) => void
   onCancelUntag: () => void
@@ -204,7 +200,7 @@ function TavernListPane(props: PanelViewProps, taverns: readonly TavernView[]): 
     SectionTitle({ text: '酒馆工作区', count: taverns.length }),
     taverns.length === 0
       ? createElement('div', { className: CLASS.hint },
-        '还没有酒馆工作区。在右侧新建表单里填一个名称就能创建；也可以把已有工作区收编为酒馆。')
+        '还没有酒馆工作区。在右侧新建表单里填一个名称就能创建。')
       : createElement('div', null, taverns.map((tavern, index) => TavernRow(props, tavern, index))))
 }
 
@@ -266,28 +262,6 @@ function CreateGroup(props: PanelViewProps, canCreate: boolean, defaultRoot: str
         }))))
 }
 
-/** The adopt list, one group inside the right pane, or `null` when empty. */
-function AdoptGroup(props: PanelViewProps, adoptable: readonly WorkspaceView[]): ReactElement | null {
-  if (adoptable.length === 0) return null
-  return createElement('section', { className: CLASS.group },
-    SectionTitle({ text: '收编已有工作区', count: adoptable.length }),
-    createElement('div', { className: CLASS.hint },
-      `按当前选择的模式（${MODE_LABELS[props.draftMode]}）收编。`),
-    createElement('div', null, adoptable.map((workspace, index) => createElement('div', {
-      key: workspace.id,
-      className: CLASS.row,
-      style: { animationDelay: `${Math.min(index, 8) * 35}ms` },
-    },
-    createElement('div', { className: CLASS.rowMain },
-      createElement('div', { className: CLASS.name }, workspace.title),
-      createElement('div', { className: CLASS.path, title: workspace.path }, workspace.path)),
-    Button({
-      label: '收编为酒馆',
-      onClick: () => props.onAdopt(workspace.id),
-      disabled: props.busy,
-    })))))
-}
-
 /**
  * Render the panel body without hooks, so it stays unit-testable.
  * @param props - read model and action callbacks.
@@ -296,7 +270,6 @@ function AdoptGroup(props: PanelViewProps, adoptable: readonly WorkspaceView[]):
 export function PanelView(props: PanelViewProps): ReactElement {
   const overview = props.overview
   const taverns = overview?.taverns ?? []
-  const adoptable = (overview?.workspaces ?? []).filter(workspace => !workspace.tavern)
   const defaultRoot = overview?.defaultRoot ?? ''
   const canCreate = !props.busy
     && (props.draftTitle.trim().length > 0 || props.draftPath.trim().length > 0)
@@ -309,8 +282,7 @@ export function PanelView(props: PanelViewProps): ReactElement {
       createElement('div', { className: CLASS.cardBody },
         TavernListPane(props, taverns),
         createElement('section', { className: CLASS.pane },
-          CreateGroup(props, canCreate, defaultRoot),
-          AdoptGroup(props, adoptable))),
+          CreateGroup(props, canCreate, defaultRoot))),
       createElement('footer', { className: CLASS.cardFoot },
         createElement('div', { className: CLASS.hint },
           '标识文件只随目录走；删除工作区注册不会删除目录，重新添加同一目录时会自动恢复为酒馆。'))))
@@ -459,13 +431,6 @@ export function TavernPanel(): ReactElement {
     })
   }, [draftMode, draftPath, draftTitle, run])
 
-  const onAdopt = useCallback((workspaceId: string) => {
-    void run(async () => {
-      await postTavern('/tavern/adopt', { workspaceId, mode: draftMode })
-      return `已把该工作区收编为酒馆（${MODE_LABELS[draftMode]}）`
-    })
-  }, [draftMode, run])
-
   const onConfirmUntag = useCallback((workspaceId: string) => {
     void run(async () => {
       await postTavern('/tavern/untag', { workspaceId })
@@ -489,7 +454,6 @@ export function TavernPanel(): ReactElement {
     onModeChange: setDraftMode,
     onCreate,
     onRefresh: () => { void refresh() },
-    onAdopt,
     onRequestUntag: setConfirmUntag,
     onConfirmUntag,
     onCancelUntag: () => setConfirmUntag(null),

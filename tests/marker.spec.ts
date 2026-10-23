@@ -137,14 +137,12 @@ describe('marker registry', () => {
     expect(listed[0]).toMatchObject({ workspaceId: 'tavern', path: tavernRoot, title: 'Tavern' })
   })
 
-  it('adopts and untags a registered workspace', async () => {
+  it('untags a registered workspace', async () => {
     const root = await temporaryRoot()
     const registry = new TavernMarkerRegistry(new FakeWorkspaces([
       { id: 'target', path: root, title: 'Target' },
     ]))
-    expect(await registry.isTavernDirectory(root)).toBe(false)
-    const view = await registry.adopt('target')
-    expect(view.marker.kind).toBe('dshtavern')
+    await ensureMarker(root)
     expect(await registry.isTavernDirectory(root)).toBe(true)
     expect(await registry.untag('target')).toBe(true)
     expect(await registry.isTavernDirectory(root)).toBe(false)
@@ -152,7 +150,6 @@ describe('marker registry', () => {
 
   it('rejects unknown workspaces', async () => {
     const registry = new TavernMarkerRegistry(new FakeWorkspaces([]))
-    await expect(registry.adopt('missing')).rejects.toBeInstanceOf(TavernWorkspaceNotFoundError)
     await expect(registry.untag('missing')).rejects.toBeInstanceOf(TavernWorkspaceNotFoundError)
   })
 

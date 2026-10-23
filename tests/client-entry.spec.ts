@@ -48,7 +48,6 @@ function renderPanel(overrides: Partial<PanelViewProps> = {}): string {
     onModeChange: () => {},
     onCreate: () => {},
     onRefresh: () => {},
-    onAdopt: () => {},
     onRequestUntag: () => {},
     onConfirmUntag: () => {},
     onCancelUntag: () => {},
@@ -131,13 +130,15 @@ describe('browser entry', () => {
     expect(panel).not.toContain('提示词编排')
   })
 
-  it('renders a tavern row and the adoptable workspace list', () => {
+  it('renders the tavern list without an adopt list', () => {
     const panel = renderPanel({ overview: sampleOverview })
     expect(panel).toContain('雾都夜话')
     expect(panel).toContain('tavernId 01234567')
-    expect(panel).toContain('编码项目')
-    expect(panel).toContain('收编为酒馆')
     expect(panel).toContain('D:/taverns')
+    // Creating a tavern is the only way in: the panel no longer offers to
+    // convert an existing workspace.
+    expect(panel).not.toContain('收编为酒馆')
+    expect(panel).not.toContain('编码项目')
   })
 
   it('asks for a second click before removing a marker', () => {

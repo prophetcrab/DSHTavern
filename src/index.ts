@@ -604,20 +604,6 @@ export class TavernMarkerRegistry {
   }
 
   /**
-   * Turn one registered workspace into a tavern workspace.
-   * @param workspaceId - workspace id.
-   * @param mode - mode chosen before adoption; ignored when a marker already exists.
-   * @returns the tavern workspace view.
-   * @throws TavernWorkspaceNotFoundError when the id is not registered.
-   */
-  async adopt(workspaceId: string, mode: TavernMode = 'rp'): Promise<TavernWorkspaceView> {
-    const workspace = this.source.get(workspaceId)
-    if (workspace === undefined) throw new TavernWorkspaceNotFoundError(workspaceId)
-    const marker = await ensureMarker(workspace.path, workspace.title, { mode })
-    return toView(workspace, marker)
-  }
-
-  /**
    * Remove one workspace's tavern marker.
    * @param workspaceId - workspace id.
    * @returns whether a marker was removed.
@@ -717,11 +703,6 @@ export class TavernWorkspaceService extends Service {
       create: async (directory, title) => toRecord(await this.ctx.workspaceRegistry.create(directory, title)),
     }
     return createTavernWorkspace(registrar, input)
-  }
-
-  /** @param workspaceId - workspace id. @param mode - mode chosen before adoption. @returns the adopted tavern workspace. */
-  adopt(workspaceId: string, mode: TavernMode = 'rp'): Promise<TavernWorkspaceView> {
-    return this.markers.adopt(workspaceId, mode)
   }
 
   /** @param workspaceId - workspace id. @returns whether a marker was removed. */
@@ -1664,11 +1645,6 @@ export class TavernWorkspaceService extends Service {
       }), 'dshtavern: /tavern/create')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
-        path: '/tavern/adopt',
-        handler: (req, res) => this.handleAdopt(req, res),
-      }), 'dshtavern: /tavern/adopt')
-      webCtx.effect(() => webCtx.webServer.register({
-        kind: 'exact',
         path: '/tavern/untag',
         handler: (req, res) => this.handleUntag(req, res),
       }), 'dshtavern: /tavern/untag')
@@ -1763,22 +1739,6 @@ export class TavernWorkspaceService extends Service {
         mode: tavernModeFromBody(body),
       })
       sendJson(res, 200, { ok: true, tavern })
-    } catch (error) {
-      this.fail(res, error)
-    }
-  }
-
-  private async handleAdopt(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!allowLoopback(req, res)) return
-    if (req.method !== 'POST') {
-      methodNotAllowed(res, 'POST')
-      return
-    }
-    try {
-      const body = await readJsonObject(req)
-      const workspaceId = optionalString(body, 'workspaceId')
-      if (workspaceId === undefined) throw new TavernInputError('缺少 workspaceId')
-      sendJson(res, 200, { ok: true, tavern: await this.adopt(workspaceId, tavernModeFromBody(body)) })
     } catch (error) {
       this.fail(res, error)
     }
