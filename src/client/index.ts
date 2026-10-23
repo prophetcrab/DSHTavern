@@ -117,15 +117,11 @@ export interface PanelViewProps {
   draftPath: string
   draftMode: TavernModeView
   lastRefreshed: string | null
-  confirmUntag: string | null
   onTitleChange: (value: string) => void
   onPathChange: (value: string) => void
   onModeChange: (value: TavernModeView) => void
   onCreate: () => void
   onRefresh: () => void
-  onRequestUntag: (workspaceId: string) => void
-  onConfirmUntag: (workspaceId: string) => void
-  onCancelUntag: () => void
   onSubmitShortcut: () => void
 }
 
@@ -163,9 +159,8 @@ function CardBanners(props: PanelViewProps): ReactElement | null {
       : createElement('div', { className: CLASS.bannerNotice }, props.notice))
 }
 
-/** One tavern workspace row with its confirm-on-second-click removal. */
-function TavernRow(props: PanelViewProps, tavern: TavernView, index: number): ReactElement {
-  const removing = props.confirmUntag === tavern.workspaceId
+/** One tavern workspace row. */
+function TavernRow(tavern: TavernView, index: number): ReactElement {
   return createElement('div', {
     key: tavern.workspaceId,
     className: CLASS.row,
@@ -175,23 +170,7 @@ function TavernRow(props: PanelViewProps, tavern: TavernView, index: number): Re
     createElement('div', { className: CLASS.name }, tavern.title),
     createElement('div', { className: CLASS.path, title: tavern.path }, tavern.path),
     createElement('div', { className: CLASS.hint },
-      `tavernId ${tavern.marker.tavernId.slice(0, 8)} · ${MODE_LABELS[tavern.marker.mode ?? 'rp']} · 创建于 ${formatInstant(tavern.marker.createdAt)}`)),
-  createElement('div', { style: { display: 'flex', gap: 8, flexShrink: 0 } },
-    removing
-      ? createElement('div', { style: { display: 'flex', gap: 8 } },
-        Button({
-          label: '确认取消',
-          className: CLASS.buttonDanger,
-          onClick: () => props.onConfirmUntag(tavern.workspaceId),
-          disabled: props.busy,
-        }),
-        Button({ label: '返回', onClick: props.onCancelUntag, disabled: props.busy }))
-      : Button({
-        label: '取消标记',
-        className: CLASS.buttonDanger,
-        onClick: () => props.onRequestUntag(tavern.workspaceId),
-        disabled: props.busy,
-      })))
+      `tavernId ${tavern.marker.tavernId.slice(0, 8)} · ${MODE_LABELS[tavern.marker.mode ?? 'rp']} · 创建于 ${formatInstant(tavern.marker.createdAt)}`)))
 }
 
 /** The tavern workspace list pane. */
@@ -201,7 +180,7 @@ function TavernListPane(props: PanelViewProps, taverns: readonly TavernView[]): 
     taverns.length === 0
       ? createElement('div', { className: CLASS.hint },
         '还没有酒馆工作区。在右侧新建表单里填一个名称就能创建。')
-      : createElement('div', null, taverns.map((tavern, index) => TavernRow(props, tavern, index))))
+      : createElement('div', null, taverns.map((tavern, index) => TavernRow(tavern, index))))
 }
 
 /** Mode picker shared by creation and adoption. */
@@ -335,9 +314,6 @@ function clockLabel(): string {
   return new Date().toTimeString().slice(0, 8)
 }
 
-/** How long a destructive action waits for a second click before reverting. */
-const CONFIRM_TIMEOUT_MS = 5000
-
 /**
  * Stateful container: owns the read model, the form draft, and the request
  * lifecycle; renders {@link PanelView}.
@@ -357,7 +333,6 @@ export function TavernPanel(): ReactElement {
   const [draftPath, setDraftPath] = useState('')
   const [draftMode, setDraftMode] = useState<TavernModeView>('rp')
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null)
-  const [confirmUntag, setConfirmUntag] = useState<string | null>(null)
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -393,18 +368,10 @@ export function TavernPanel(): ReactElement {
     }
   }, [refresh])
 
-  // A pending destructive confirmation reverts on its own.
-  useEffect(() => {
-    if (confirmUntag === null) return
-    const timer = window.setTimeout(() => setConfirmUntag(null), CONFIRM_TIMEOUT_MS)
-    return () => window.clearTimeout(timer)
-  }, [confirmUntag])
-
   const run = useCallback(async (operation: () => Promise<string>) => {
     setBusy(true)
     setError(null)
     setNotice(null)
-    setConfirmUntag(null)
     try {
       const message = await operation()
       await refresh(true)
@@ -431,13 +398,6 @@ export function TavernPanel(): ReactElement {
     })
   }, [draftMode, draftPath, draftTitle, run])
 
-  const onConfirmUntag = useCallback((workspaceId: string) => {
-    void run(async () => {
-      await postTavern('/tavern/untag', { workspaceId })
-      return '已取消酒馆标记（目录与已有会话保留）'
-    })
-  }, [run])
-
   return createElement(PanelView, {
     overview,
     loading,
@@ -448,15 +408,11 @@ export function TavernPanel(): ReactElement {
     draftPath,
     draftMode,
     lastRefreshed,
-    confirmUntag,
     onTitleChange: setDraftTitle,
     onPathChange: setDraftPath,
     onModeChange: setDraftMode,
     onCreate,
     onRefresh: () => { void refresh() },
-    onRequestUntag: setConfirmUntag,
-    onConfirmUntag,
-    onCancelUntag: () => setConfirmUntag(null),
     onSubmitShortcut: onCreate,
   })
 }

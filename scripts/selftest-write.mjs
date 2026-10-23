@@ -353,26 +353,15 @@ check('director preview includes director-only lore', directorSystem.includes('�
 check('director preview includes the cast roster with briefs', directorSystem.includes('守夜人'))
 check('director preview keeps the format contract last', /nextSpeaker/.test(directorSystem.trimEnd().slice(-200)))
 
-// --- untag -------------------------------------------------------------------
-// The route is one-way: a workspace leaves the tavern list and a new tavern has
-// to be created to bring it back. The script re-creates it below so the run can
-// be repeated.
-const untagged = await post('/tavern/untag', { workspaceId: id })
-check('untag removes the marker', untagged.status === 200 && untagged.payload.removed === true,
-  JSON.stringify(untagged.payload))
-const afterUntag = await get('/tavern/state')
-check('untagged workspace leaves the tavern list',
-  !(afterUntag.payload.taverns ?? []).some(t => t.workspaceId === id))
-const afterUntagPrompt = await get(`/tavern/prompt?workspaceId=${workspaceId}`)
-check('untagged workspace refuses tavern routes', afterUntagPrompt.status === 400, `status ${afterUntagPrompt.status}`)
+// --- removed routes ----------------------------------------------------------
+// Creating a tavern is the only mutation the panel offers; the two routes that
+// used to convert or remove one are gone.
 const adoptGone = await post('/tavern/adopt', { workspaceId: id })
 check('the adopt route is gone', adoptGone.status === 404, `status ${adoptGone.status}`)
-const recreated = await post('/tavern/create', { title: TITLE, mode: 'rp' })
-check('creating it again restores the marker', recreated.status === 200
-  && recreated.payload.tavern?.marker?.kind === 'dshtavern', `status ${recreated.status}`)
-const restoredId = recreated.payload.tavern?.workspaceId
-const restored = await get(`/tavern/prompt?workspaceId=${encodeURIComponent(restoredId ?? '')}`)
-check('re-created tavern serves tavern routes again', restored.status === 200 && restored.payload.ok === true)
+const untagGone = await post('/tavern/untag', { workspaceId: id })
+check('the untag route is gone', untagGone.status === 404, `status ${untagGone.status}`)
+const stateAfter = await get('/tavern/state')
+check('the tavern is still registered', (stateAfter.payload.taverns ?? []).some(t => t.workspaceId === id))
 
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) {

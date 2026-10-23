@@ -56,7 +56,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/client/index.ts` | 面板注册：`main`、`sidebar.panellist`、`conversation.input.left`、`shell.overlay`；酒馆列表与新建/取消标记 |
+| `src/client/index.ts` | 面板注册：`main`、`sidebar.panellist`、`conversation.input.left`、`shell.overlay`；酒馆列表与新建 |
 | `src/client/toolbox.ts` | 悬浮启动器、图标浮层、子窗口容器；每 15 秒刷新酒馆列表 |
 | `src/client/reply-to.ts` | 点气泡里的角色名 → 把「对角色名说：」预填进输入框，让下一句直接对这个人说 |
 | `src/client/characters.ts` | 角色卡列表与编辑表单 |
@@ -108,7 +108,6 @@
 |---|---|---|
 | `/tavern/state` | GET | 酒馆列表 + 全部工作区及其酒馆标记 |
 | `/tavern/create` | POST | 建目录、写标记、注册工作区 |
-| `/tavern/untag` | POST | 删除标记（保留目录与会话） |
 | `/tavern/prompt` | GET/POST | 读/写角色或导演编排（`?scope=director`） |
 | `/tavern/characters` | GET/POST | 角色卡列表、创建、保存、删除 |
 | `/tavern/characters/transfer` | GET/POST | 导出单张卡为 `.charc`（`?id=`）／导入 `.charc` |
@@ -168,7 +167,7 @@
 
 已完成并实测：
 
-- 工作区标记的新建与取消；两者与磁盘标记、DSH 工作区注册、面板读模型一致。
+- 工作区标记的新建；与磁盘标记、DSH 工作区注册、面板读模型一致。
 - 酒馆面板：列表、自动刷新（挂载 / 每 4 秒 / 窗口聚焦 / 操作后）、二次确认、响应式字号。
 - 角色卡：原生格式 CRUD（`characters/<id>.charc`，schema 1，单卡上限 256KB）；导入/导出为单文件 `.charc`，导入时重新分配 id 与时间戳，因此导入到来源工作区得到的是副本而非覆盖。
 - 世界书：工作区级条目编辑、关键词触发预览；四种次要词逻辑、三种插入位置、`director` 专属条目、8 条 / 6000 字预算。整本导出为 `.world`（带 `kind: dshtavern.worldbook` 的封套，含全部条目），导入替换当前整本；也接受裸条目数组便于手写。

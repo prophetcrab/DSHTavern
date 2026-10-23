@@ -7,13 +7,11 @@ import {
   TavernMarkerInvalidError,
   TavernMarkerRegistry,
   TavernMarkerVersionError,
-  TavernWorkspaceNotFoundError,
   createMarker,
   ensureMarker,
   markerPath,
   parseMarker,
   readMarker,
-  removeMarker,
   tavernDirectory,
 } from '../src/index.ts'
 import type { TavernWorkspaceRecord, TavernWorkspaceSource } from '../src/index.ts'
@@ -70,19 +68,20 @@ describe('marker value', () => {
 })
 
 describe('marker file', () => {
-  it('writes, reads, and removes a marker', async () => {
+  it('writes and reads a marker at the documented path', async () => {
     const root = await temporaryRoot()
     await ensureMarker(root, '雾都夜话')
     expect(await readMarker(root)).toMatchObject({ kind: 'dshtavern', title: '雾都夜话' })
     expect(markerPath(root)).toBe(join(root, '.dshtavern', 'tavern.json'))
     expect(tavernDirectory(root)).toBe(join(root, '.dshtavern'))
-    expect(await removeMarker(root)).toBe(true)
-    expect(await removeMarker(root)).toBe(false)
+  })
+
+  it('reads a directory without a marker as a non-tavern', async () => {
+    const root = await temporaryRoot()
     expect(await readMarker(root)).toBeUndefined()
   })
 
-  it('is idempotent when a marker already exists', async () => {
-    const root = await temporaryRoot()
+  it('is idempotent when a marker already exists', async () => {    const root = await temporaryRoot()
     const first = await ensureMarker(root, 'one')
     const second = await ensureMarker(root, 'two')
     expect(second.tavernId).toBe(first.tavernId)
@@ -135,22 +134,6 @@ describe('marker registry', () => {
     const listed = await registry.list()
     expect(listed).toHaveLength(1)
     expect(listed[0]).toMatchObject({ workspaceId: 'tavern', path: tavernRoot, title: 'Tavern' })
-  })
-
-  it('untags a registered workspace', async () => {
-    const root = await temporaryRoot()
-    const registry = new TavernMarkerRegistry(new FakeWorkspaces([
-      { id: 'target', path: root, title: 'Target' },
-    ]))
-    await ensureMarker(root)
-    expect(await registry.isTavernDirectory(root)).toBe(true)
-    expect(await registry.untag('target')).toBe(true)
-    expect(await registry.isTavernDirectory(root)).toBe(false)
-  })
-
-  it('rejects unknown workspaces', async () => {
-    const registry = new TavernMarkerRegistry(new FakeWorkspaces([]))
-    await expect(registry.untag('missing')).rejects.toBeInstanceOf(TavernWorkspaceNotFoundError)
   })
 
   it('detects tavern session working directories', async () => {

@@ -360,22 +360,7 @@ export async function ensureMarker(
   return marker
 }
 
-/**
- * Remove the marker file, keeping every other file untouched.
- * @param directory - workspace directory.
- * @returns whether a marker file was removed.
- */
-export async function removeMarker(directory: string): Promise<boolean> {
-  try {
-    await unlink(markerPath(directory))
-    return true
-  } catch (error) {
-    if (isMissing(error)) return false
-    throw error
-  }
-}
-
-/** A create/adopt request named a directory or workspace this build cannot use. */
+/** A create request named a directory or workspace this build cannot use. */
 export class TavernInputError extends Error {
   constructor(message: string) {
     super(message)
@@ -602,18 +587,6 @@ export class TavernMarkerRegistry {
     if (cwd === undefined || cwd.length === 0 || !isAbsolute(cwd)) return false
     return (await readMarker(cwd)) !== undefined
   }
-
-  /**
-   * Remove one workspace's tavern marker.
-   * @param workspaceId - workspace id.
-   * @returns whether a marker was removed.
-   * @throws TavernWorkspaceNotFoundError when the id is not registered.
-   */
-  async untag(workspaceId: string): Promise<boolean> {
-    const workspace = this.source.get(workspaceId)
-    if (workspace === undefined) throw new TavernWorkspaceNotFoundError(workspaceId)
-    return removeMarker(workspace.path)
-  }
 }
 
 /**
@@ -703,11 +676,6 @@ export class TavernWorkspaceService extends Service {
       create: async (directory, title) => toRecord(await this.ctx.workspaceRegistry.create(directory, title)),
     }
     return createTavernWorkspace(registrar, input)
-  }
-
-  /** @param workspaceId - workspace id. @returns whether a marker was removed. */
-  untag(workspaceId: string): Promise<boolean> {
-    return this.markers.untag(workspaceId)
   }
 
   /**
@@ -1645,11 +1613,6 @@ export class TavernWorkspaceService extends Service {
       }), 'dshtavern: /tavern/create')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
-        path: '/tavern/untag',
-        handler: (req, res) => this.handleUntag(req, res),
-      }), 'dshtavern: /tavern/untag')
-      webCtx.effect(() => webCtx.webServer.register({
-        kind: 'exact',
         path: '/tavern/prompt',
         handler: (req, res) => this.handlePromptLayout(req, res),
       }), 'dshtavern: /tavern/prompt')
@@ -1739,22 +1702,6 @@ export class TavernWorkspaceService extends Service {
         mode: tavernModeFromBody(body),
       })
       sendJson(res, 200, { ok: true, tavern })
-    } catch (error) {
-      this.fail(res, error)
-    }
-  }
-
-  private async handleUntag(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!allowLoopback(req, res)) return
-    if (req.method !== 'POST') {
-      methodNotAllowed(res, 'POST')
-      return
-    }
-    try {
-      const body = await readJsonObject(req)
-      const workspaceId = optionalString(body, 'workspaceId')
-      if (workspaceId === undefined) throw new TavernInputError('缺少 workspaceId')
-      sendJson(res, 200, { ok: true, removed: await this.untag(workspaceId) })
     } catch (error) {
       this.fail(res, error)
     }

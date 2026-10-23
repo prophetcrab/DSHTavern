@@ -141,11 +141,12 @@ describe('browser entry', () => {
     expect(panel).not.toContain('编码项目')
   })
 
-  it('asks for a second click before removing a marker', () => {
-    expect(renderPanel({ overview: sampleOverview, confirmUntag: 'w1' })).toContain('确认取消')
-    expect(renderPanel({ overview: sampleOverview, confirmUntag: 'w1' })).toContain('返回')
-    expect(renderPanel({ overview: sampleOverview, confirmUntag: null })).not.toContain('确认取消')
-    expect(renderPanel({ overview: sampleOverview, confirmUntag: null })).toContain('取消标记')
+  it('offers no way to remove or convert a tavern', () => {
+    const panel = renderPanel({ overview: sampleOverview })
+    // Creating a tavern is the only way in and the only thing the panel offers;
+    // undoing one means deleting its directory outside the panel.
+    expect(panel).not.toContain('取消标记')
+    expect(panel).not.toContain('收编为酒馆')
   })
 
   it('disables creation while the form is empty', () => {
