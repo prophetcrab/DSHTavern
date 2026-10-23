@@ -451,12 +451,21 @@ export function parseTrackerSummary(value: unknown): TrackerSummary | undefined 
 }
 
 /**
- * Turns that already have a ledger, for the turn rail's marker.
+ * Turns a ledger has read, for the turn rail's marker.
+ *
+ * A ledger is written from the whole story up to its own turn, so reaching turn
+ * N means every turn before it was read too. Marking only the turns that happen
+ * to own a ledger file would light up 3 and 7 while leaving 1, 2, 4, 5 and 6
+ * dark, which reads as "these turns were skipped" — the opposite of what
+ * happened.
  * @param summaries - ledgers newest first.
- * @returns tracked turns in ascending order.
+ * @returns every turn up to the newest ledger's turn, ascending; empty before
+ *   the first run.
  */
 export function trackedTurns(summaries: readonly TrackerSummary[]): number[] {
-  return summaries.map(summary => summary.turn).sort((left, right) => left - right)
+  let newest = 0
+  for (const summary of summaries) newest = Math.max(newest, summary.turn)
+  return Array.from({ length: newest }, (_, index) => index + 1)
 }
 
 /**

@@ -167,7 +167,7 @@ describe('tracker storage', () => {
     expect((await readTrackerState(directory, 'session-b')).lastTurn).toBe(0)
   })
 
-  it('lists ledgers newest first and reports their turns', async () => {
+  it('lists ledgers newest first and marks every turn the newest one read', async () => {
     const directory = await workspace()
     for (const turn of [5, 12, 3]) {
       await writeTrackerSummary(directory, 'session-a', {
@@ -177,7 +177,15 @@ describe('tracker storage', () => {
     }
     const summaries = await listTrackerSummaries(directory, 'session-a')
     expect(summaries.map(summary => summary.turn)).toEqual([12, 5, 3])
-    expect(trackedTurns(summaries)).toEqual([3, 5, 12])
+    // A run reads from the opening, so reaching 12 means 1 through 12 were all
+    // read — not just the three turns that happen to own a ledger file.
+    expect(trackedTurns(summaries)).toEqual(
+      Array.from({ length: 12 }, (_, index) => index + 1),
+    )
+  })
+
+  it('marks nothing before the first run', () => {
+    expect(trackedTurns([])).toEqual([])
   })
 
   it('skips a damaged ledger instead of failing the listing', async () => {

@@ -67,8 +67,15 @@ export interface TrackerChatView {
   readonly newestTurn: number
   /** Ledgers newest first. */
   readonly summaries: readonly TrackerSummary[]
-  /** Turns that already have a ledger, ascending; the turn rail marks these. */
+  /**
+   * Every turn the newest ledger has read, ascending; the turn rail marks these.
+   *
+   * A run reads the whole story up to its own turn, so this runs from 1 to the
+   * newest ledger's turn rather than listing only the turns that own a file.
+   */
   readonly trackedTurns: readonly number[]
+  /** How many runs have written a ledger. */
+  readonly runCount: number
   /** Whether a run for this chat is in flight. */
   readonly running: boolean
   /**
@@ -152,6 +159,7 @@ export class TavernTrackerService extends Service {
         newestTurn,
         summaries,
         trackedTurns: trackedTurns(summaries),
+        runCount: summaries.length,
         running: this.running.has(cacheKey(workspace.path, sessionId)),
         staleTurns,
         ...(failure === undefined ? {} : { lastError: failure }),

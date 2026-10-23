@@ -47,7 +47,10 @@ export interface TrackerChatView {
   readonly sessionId: string
   readonly newestTurn: number
   readonly summaries: readonly TrackerSummaryView[]
+  /** Every turn the newest ledger has read; the rail marks these. */
   readonly trackedTurns: readonly number[]
+  /** How many runs have written a ledger. */
+  readonly runCount: number
   readonly running: boolean
   readonly staleTurns: readonly number[]
   readonly lastError?: string
@@ -450,7 +453,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
         createElement('span', { className: 'dshtavern-tracker-hint' },
           current === undefined || current.newestTurn === 0
             ? '还没有剧情'
-            : `最新第 ${current.newestTurn} 轮 · 已回顾 ${current.trackedTurns.length} 次`)),
+            : `最新第 ${current.newestTurn} 轮 · 已回顾 ${current.runCount} 次`)),
       ordered.length === 0
         ? createElement('div', { className: 'dshtavern-tracker-hint' }, '这个工作区还没有可以回顾的聊天。')
         : ordered.map(chat => createElement('div', { key: chat.sessionId, className: 'dshtavern-tracker-chat' },
