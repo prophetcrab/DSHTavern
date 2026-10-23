@@ -10,6 +10,7 @@ import {
   normalizeTrackerConfig,
   readTrackerConfig,
   readTrackerState,
+  staleTurnsAfterWrite,
   trackerDue,
   trackedTurns,
   writeTrackerConfig,
@@ -66,34 +67,53 @@ function line(seq: number, kind: 'narration' | 'speech', text: string, speakerNa
 }
 
 describe('tracker config', () => {
-  it('starts disabled with the turn trigger as the only schedule', () => {
+  it('starts disabled with the turn trigger selected', () => {
     const config = defaultTrackerConfig()
     expect(config.enabled).toBe(false)
+    expect(config.trigger).toBe('turns')
     expect(config.everyTurns).toBeGreaterThan(0)
-    expect(config.everyMinutes).toBe(0)
+    // Both numbers stay valid so switching the trigger needs no retyping.
+    expect(config.everyMinutes).toBeGreaterThan(0)
   })
 
-  it('rejects out-of-range and half-filled values', () => {
+  it('rejects out-of-range, half-filled, and unknown triggers', () => {
     expect(() => normalizeTrackerConfig({ everyTurns: -1 })).toThrow(TrackerConfigInvalidError)
     expect(() => normalizeTrackerConfig({ everyMinutes: 999_999 })).toThrow(TrackerConfigInvalidError)
     expect(() => normalizeTrackerConfig({ model: { provider: 'p' } })).toThrow(TrackerConfigInvalidError)
+    expect(() => normalizeTrackerConfig({ trigger: 'hourly' })).toThrow(/触发方式/)
     expect(() => normalizeTrackerConfig({ schema: TRACKER_SCHEMA + 1 })).toThrow(/高于支持版本/)
+  })
+
+  it('treats a stored 0 as the legacy "off" marker and keeps a usable interval', () => {
+    // 0 could only come from an older file; it becomes the default rather than
+    // either failing the file or producing a schedule that never fires.
+    const config = normalizeTrackerConfig({ everyTurns: 0, everyMinutes: 0 })
+    expect(config.everyTurns).toBe(defaultTrackerConfig().everyTurns)
+    expect(config.everyMinutes).toBe(defaultTrackerConfig().everyMinutes)
+  })
+
+  it('migrates a stored config that only had the minute trigger set', () => {
+    // Older files expressed "off" as 0 and had no `trigger` field. A file that
+    // set a minute interval was using the time schedule.
+    expect(normalizeTrackerConfig({ everyMinutes: 30, everyTurns: 10 }).trigger).toBe('minutes')
+    expect(normalizeTrackerConfig({ everyMinutes: 0, everyTurns: 10 }).trigger).toBe('turns')
   })
 
   it('reads defaults when no file exists and round-trips a stored config', async () => {
     const directory = await workspace()
     expect(await readTrackerConfig(directory)).toEqual(defaultTrackerConfig())
     const written = await writeTrackerConfig(directory, {
-      enabled: true, everyTurns: 4, everyMinutes: 30, maxTranscriptChars: 12_000,
+      enabled: true, trigger: 'minutes', everyTurns: 4, everyMinutes: 30, maxTranscriptChars: 12_000,
     })
     expect(written.enabled).toBe(true)
-    expect((await readTrackerConfig(directory)).everyTurns).toBe(4)
+    expect(written.trigger).toBe('minutes')
+    expect((await readTrackerConfig(directory)).everyMinutes).toBe(30)
   })
 })
 
 describe('tracker scheduling', () => {
   const now = Date.parse('2026-10-23T12:00:00.000Z')
-  const base: TrackerConfig = { ...defaultTrackerConfig(), enabled: true, everyTurns: 5, everyMinutes: 0 }
+  const base: TrackerConfig = { ...defaultTrackerConfig(), enabled: true, trigger: 'turns', everyTurns: 5, everyMinutes: 30 }
   const fresh: TrackerState = { schema: TRACKER_SCHEMA, lastTurn: 0 }
 
   it('stays idle while disabled', () => {
@@ -111,8 +131,22 @@ describe('tracker scheduling', () => {
     expect(trackerDue(base, { schema: TRACKER_SCHEMA, lastTurn: 7 }, 7, now)).toBe(false)
   })
 
-  it('fires on elapsed time independently of the beat count', () => {
-    const timed: TrackerConfig = { ...base, everyTurns: 0, everyMinutes: 30 }
+  it('uses only the configured schedule, never both', () => {
+    // The turn trigger is far from due, and the minute interval is long past;
+    // picking 'turns' means the elapsed time must not fire a run.
+    const turnsOnly: TrackerConfig = { ...base, trigger: 'turns', everyTurns: 10 }
+    const longAgo = new Date(now - 10 * 60 * 60_000).toISOString()
+    expect(trackerDue(turnsOnly, { schema: TRACKER_SCHEMA, lastTurn: 1, lastAt: longAgo }, 3, now)).toBe(false)
+
+    // The minute trigger is not due, and enough new beats have arrived;
+    // picking 'minutes' means the beat count must not fire a run.
+    const minutesOnly: TrackerConfig = { ...base, trigger: 'minutes', everyMinutes: 60 }
+    const justNow = new Date(now - 60_000).toISOString()
+    expect(trackerDue(minutesOnly, { schema: TRACKER_SCHEMA, lastTurn: 1, lastAt: justNow }, 90, now)).toBe(false)
+  })
+
+  it('fires on elapsed time alone when that is the chosen trigger', () => {
+    const timed: TrackerConfig = { ...base, trigger: 'minutes', everyMinutes: 30 }
     const lastAt = new Date(now - 29 * 60_000).toISOString()
     expect(trackerDue(timed, { schema: TRACKER_SCHEMA, lastTurn: 1, lastAt }, 2, now)).toBe(false)
     const older = new Date(now - 31 * 60_000).toISOString()
@@ -120,12 +154,8 @@ describe('tracker scheduling', () => {
   })
 
   it('treats a never-tracked chat as due on the time trigger', () => {
-    const timed: TrackerConfig = { ...base, everyTurns: 0, everyMinutes: 60 }
+    const timed: TrackerConfig = { ...base, trigger: 'minutes', everyMinutes: 60 }
     expect(trackerDue(timed, fresh, 1, now)).toBe(true)
-  })
-
-  it('never fires with both triggers off', () => {
-    expect(trackerDue({ ...base, everyTurns: 0, everyMinutes: 0 }, fresh, 100, now)).toBe(false)
   })
 })
 
@@ -189,32 +219,59 @@ describe('tracker transcript', () => {
 })
 
 describe('tracker prompt', () => {
-  it('gives the model the cast, hidden plot, and previous ledger', () => {
+  it('gives the model the cast and the hidden plot', () => {
     const system = buildTrackerSystem({
       cards: [card()],
       world: { scene: '灯塔', facts: [], hidden: ['轴撑不到天亮'] },
-      previous: {
-        schema: TRACKER_SCHEMA, turn: 4, at: '', world: '上一版的雨夜', transcriptChars: 100,
-        characters: [{ name: '极光', progress: '他已经开始怀疑灯芯' }],
-      },
     })
     expect(system).toContain('极光')
     expect(system).toContain('轴撑不到天亮')
-    expect(system).toContain('上一版的雨夜')
-    expect(system).toContain('他已经开始怀疑灯芯')
     expect(system).toContain('{"world"')
     expect(system).toContain('不要复述他说过的台词')
   })
 
-  it('says so when there is no previous ledger', () => {
-    const system = buildTrackerSystem({ cards: [], world: { scene: '', facts: [], hidden: [] } })
-    expect(system).toContain('第一次追踪')
-    expect(system).toContain('没有角色卡')
+  it('asks for the current state of the whole story, not an incremental update', () => {
+    const system = buildTrackerSystem({ cards: [card()], world: { scene: '', facts: [], hidden: [] } })
+    // Every run reads the complete transcript, so there is no "previous
+    // ledger" section and no instruction to update one.
+    expect(system).toContain('从开场到现在的完整剧情')
+    expect(system).toContain('不是剧情经过')
+    expect(system).not.toContain('上一版')
   })
 
-  it('labels the transcript with the turn it reaches', () => {
-    expect(buildTrackerMessage('[旁白] 风停了。', 7)).toContain('写到第 7 轮')
+  it('says so when there are no cards', () => {
+    expect(buildTrackerSystem({ cards: [], world: { scene: '', facts: [], hidden: [] } }))
+      .toContain('没有角色卡')
+  })
+
+  it('labels the transcript as the full story up to the turn', () => {
+    expect(buildTrackerMessage('[旁白] 风停了。', 7)).toContain('从开场到第 7 轮')
     expect(buildTrackerMessage('', 3)).toContain('还没有写入舞台')
+  })
+})
+
+describe('tracker staleness', () => {
+  it('reports a covered turn regenerated after the ledger was written', () => {
+    const ledgerAt = Date.parse('2026-10-23T10:00:00.000Z')
+    const records = [
+      { turn: 3, replacement: 5, at: '2026-10-23T09:00:00.000Z' },
+      { turn: 4, replacement: 6, at: '2026-10-23T11:00:00.000Z' },
+    ]
+    const stale = staleTurnsAfterWrite(records, 4, ledgerAt)
+    // Turn 3 was replaced before the ledger existed, so the ledger already
+    // describes the replacement. Turn 4 was replaced after it.
+    expect(stale).toEqual([4])
+  })
+
+  it('ignores a replacement for a turn the ledger does not cover', () => {
+    const ledgerAt = Date.parse('2026-10-23T10:00:00.000Z')
+    const records = [{ turn: 9, replacement: 10, at: '2026-10-23T11:00:00.000Z' }]
+    expect(staleTurnsAfterWrite(records, 4, ledgerAt)).toEqual([])
+  })
+
+  it('treats an unparsable timestamp as stale rather than trusting the ledger', () => {
+    const records = [{ turn: 2, replacement: 3, at: 'not-a-date' }]
+    expect(staleTurnsAfterWrite(records, 4, Date.parse('2026-10-23T10:00:00.000Z'))).toEqual([2])
   })
 })
 

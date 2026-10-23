@@ -24,6 +24,9 @@ const TRACKED_CSS = `
 /** Turns known to have a ledger, per chat. */
 const trackedBySession = new Map<string, ReadonlySet<number>>()
 
+/** Turns whose ledger no longer matches the story, per chat. */
+const staleBySession = new Map<string, ReadonlySet<number>>()
+
 /**
  * Read the turn number out of a rail mark's label.
  *
@@ -45,7 +48,11 @@ export function turnOfLabel(label: string | null): number | undefined {
 
 /**
  * Apply the mark to every rendered rail mark.
- * @param tracked - turns that have a ledger.
+ *
+ * A turn that was regenerated after its ledger was written keeps no mark: the
+ * ledger describes a story that no longer exists, and a green dot would claim
+ * otherwise.
+ * @param tracked - turns that have a current ledger.
  */
 export function markTrackedTurns(tracked: ReadonlySet<number>): void {
   if (typeof document === 'undefined') return
@@ -67,9 +74,41 @@ export function markTrackedTurns(tracked: ReadonlySet<number>): void {
 export function setTrackedTurns(sessionId: string, turns: readonly number[]): void {
   const next = new Set(turns)
   const previous = trackedBySession.get(sessionId)
-  if (previous !== undefined && previous.size === next.size && [...next].every(turn => previous.has(turn))) return
+  if (previous !== undefined && previous.size === next.size && [...next].every(turn => previous.has(turn))) {
+    markTrackedTurns(effectiveTracked(sessionId))
+    return
+  }
   trackedBySession.set(sessionId, next)
-  markTrackedTurns(next)
+  markTrackedTurns(effectiveTracked(sessionId))
+}
+
+/**
+ * Record which covered turns a regeneration invalidated.
+ * @param sessionId - chat identity.
+ * @param turns - superseded turns.
+ */
+export function setStaleTurns(sessionId: string, turns: readonly number[]): void {
+  const next = new Set(turns)
+  const previous = staleBySession.get(sessionId)
+  if (previous !== undefined && previous.size === next.size && [...next].every(turn => previous.has(turn))) return
+  staleBySession.set(sessionId, next)
+  markTrackedTurns(effectiveTracked(sessionId))
+}
+
+/**
+ * Turns that should still be marked for one chat.
+ * @param sessionId - chat identity.
+ * @returns tracked turns minus the ones a replay invalidated.
+ */
+function effectiveTracked(sessionId: string): ReadonlySet<number> {
+  const tracked = trackedBySession.get(sessionId) ?? new Set<number>()
+  const stale = staleBySession.get(sessionId)
+  if (stale === undefined || stale.size === 0) return tracked
+  const effective = new Set<number>()
+  for (const turn of tracked) {
+    if (!stale.has(turn)) effective.add(turn)
+  }
+  return effective
 }
 
 /**
@@ -89,7 +128,7 @@ export function installTrackedTurnMarks(sessionId: string): () => void {
     document.head.appendChild(style)
   }
   const repaint = (): void => {
-    markTrackedTurns(trackedBySession.get(sessionId) ?? new Set())
+    markTrackedTurns(effectiveTracked(sessionId))
   }
   repaint()
   const observer = new MutationObserver(repaint)
@@ -98,6 +137,7 @@ export function installTrackedTurnMarks(sessionId: string): () => void {
     observer.disconnect()
     document.getElementById(STYLE_ID)?.remove()
     trackedBySession.delete(sessionId)
+    staleBySession.delete(sessionId)
     for (const mark of document.querySelectorAll(`[${TRACKED_MARK_ATTRIBUTE}]`)) {
       mark.removeAttribute(TRACKED_MARK_ATTRIBUTE)
     }
@@ -126,6 +166,9 @@ export async function refreshTrackedTurns(workspaceId: string, sessionId: string
       if (record.sessionId !== sessionId) continue
       if (!Array.isArray(record.trackedTurns)) return
       setTrackedTurns(sessionId, record.trackedTurns.filter((turn): turn is number => typeof turn === 'number'))
+      setStaleTurns(sessionId, Array.isArray(record.staleTurns)
+        ? record.staleTurns.filter((turn): turn is number => typeof turn === 'number')
+        : [])
       return
     }
   } catch {

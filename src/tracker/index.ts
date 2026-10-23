@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { HttpRequestError, allowLoopback, methodNotAllowed, optionalString, readJsonObject, sendJson } from '../http.js'
 import { listCharacterCards } from '../character-card.js'
 import { readStage, readWorld, storyDirectory } from '../stage.js'
-import { listBeats } from '../regenerate.js'
+import { listBeats, readRegenerations } from '../regenerate.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import {
@@ -33,6 +33,7 @@ import {
   listTrackerSummaries,
   readTrackerConfig,
   readTrackerState,
+  staleTurnsAfterWrite,
   trackerDue,
   trackedTurns,
   writeTrackerConfig,
@@ -70,6 +71,15 @@ export interface TrackerChatView {
   readonly trackedTurns: readonly number[]
   /** Whether a run for this chat is in flight. */
   readonly running: boolean
+  /**
+   * Turns whose reply was regenerated after the newest ledger was written.
+   *
+   * A ledger describes the story as it stood; regenerating a covered beat
+   * replaced part of that story, so the ledger no longer matches what is on
+   * stage. The turn rail stops marking the affected range and the panel says
+   * the ledger is out of date until the next run.
+   */
+  readonly staleTurns: readonly number[]
   /** Why the last automatic run could not write a ledger, when it failed. */
   readonly lastError?: string
 }
@@ -131,9 +141,10 @@ export class TavernTrackerService extends Service {
     const chats = await this.listChats(workspace.path)
     const views: TrackerChatView[] = []
     for (const sessionId of chats) {
-      const [summaries, newestTurn] = await Promise.all([
+      const [summaries, newestTurn, staleTurns] = await Promise.all([
         listTrackerSummaries(workspace.path, sessionId),
         this.newestTurnOf(workspace.path, sessionId),
+        this.staleTurnsOf(workspace.path, sessionId),
       ])
       const failure = this.failures.get(cacheKey(workspace.path, sessionId))
       views.push({
@@ -142,6 +153,7 @@ export class TavernTrackerService extends Service {
         summaries,
         trackedTurns: trackedTurns(summaries),
         running: this.running.has(cacheKey(workspace.path, sessionId)),
+        staleTurns,
         ...(failure === undefined ? {} : { lastError: failure }),
       })
     }
@@ -267,11 +279,10 @@ export class TavernTrackerService extends Service {
     const key = cacheKey(workspacePath, sessionId)
     try {
       const state = await readTrackerState(workspacePath, sessionId)
-      const [stage, world, cards, previous] = await Promise.all([
+      const [stage, world, cards] = await Promise.all([
         readStage(workspacePath, sessionId),
         readWorld(workspacePath, sessionId),
         listCharacterCards(workspacePath),
-        listTrackerSummaries(workspacePath, sessionId),
       ])
       const transcript = renderTranscript(stage, config.maxTranscriptChars)
       if (transcript.chars === 0) {
@@ -288,7 +299,7 @@ export class TavernTrackerService extends Service {
         this.failures.set(key, '当前部署没有 LLM 服务')
         return
       }
-      const system = buildTrackerSystem({ cards: cards.cards, world, ...(previous[0] === undefined ? {} : { previous: previous[0] }) })
+      const system = buildTrackerSystem({ cards: cards.cards, world })
       const message = buildTrackerMessage(transcript.text, newestTurn)
       let reply = ''
       let usage: TokenUsage | undefined
@@ -370,6 +381,23 @@ export class TavernTrackerService extends Service {
     } catch {
       return []
     }
+  }
+
+  /**
+   * Turns covered by the newest ledger that a later regeneration replaced.
+   * @param workspacePath - tavern workspace root.
+   * @param sessionId - chat identity.
+   * @returns superseded turns inside the ledger's range, ascending.
+   */
+  private async staleTurnsOf(workspacePath: string, sessionId: string): Promise<number[]> {
+    const directory = storyDirectory(workspacePath, sessionId)
+    const [records, summaries] = await Promise.all([
+      readRegenerations(directory),
+      listTrackerSummaries(workspacePath, sessionId),
+    ])
+    const newest = summaries[0]
+    if (newest === undefined) return []
+    return staleTurnsAfterWrite(records, newest.turn, Date.parse(newest.at))
   }
 
   /**

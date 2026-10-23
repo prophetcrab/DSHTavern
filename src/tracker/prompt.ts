@@ -13,7 +13,7 @@
 import type { CharacterCard } from '../character-card.js'
 import type { StageEntry } from '../stage.js'
 import type { WorldState } from '../stage.js'
-import type { CharacterProgress, TrackerSummary } from './summary.js'
+import type { CharacterProgress } from './summary.js'
 
 /** Longest one ledger field may be, in characters. */
 export const TRACKER_FIELD_MAX_CHARS = 4_000
@@ -63,28 +63,22 @@ export function renderTranscript(
 /**
  * Build the system prompt one tracking run sends.
  *
- * The instructions separate the three things a reader needs from a long story:
+ * Every run reads the whole story from the beginning, so the ledger always
+ * describes the current story as a whole rather than a slice of it. The
+ * instructions separate the three things a reader needs from a long story:
  * where the world stands, what each character has come to know or want, and
  * what is still unresolved. It explicitly forbids inventing progress, because
- * the ledger is read as fact by later runs.
- * @param input - cast, current world state, and the previous ledger.
+ * the ledger is read as fact.
+ * @param input - cast and current world state.
  * @returns the system prompt text.
  */
 export function buildTrackerSystem(input: {
   readonly cards: readonly CharacterCard[]
   readonly world: WorldState
-  readonly previous?: TrackerSummary
 }): string {
   const cast = input.cards.length === 0
     ? '（没有角色卡）'
     : input.cards.map(card => `- ${card.name}${card.description.trim().length === 0 ? '' : `：${firstLine(card.description)}`}`).join('\n')
-  const baseline = input.previous === undefined
-    ? '（这是第一次追踪，没有上一版摘要。）'
-    : [
-      `覆盖到第 ${input.previous.turn} 轮的摘要：`,
-      `世界：${input.previous.world}`,
-      ...input.previous.characters.map(entry => `${entry.name}：${entry.progress}`),
-    ].join('\n')
   const hidden = input.world.hidden.length === 0
     ? '（无）'
     : input.world.hidden.map(item => `- ${item}`).join('\n')
@@ -97,16 +91,13 @@ export function buildTrackerSystem(input: {
     '# 导演记录的隐藏剧情（玩家与角色都不知道）',
     hidden,
     '',
-    '# 上一版摘要',
-    baseline,
-    '',
     '# 你要写什么',
     '1. world：这个世界现在处于什么状态。写地点、时间、当前正在发生的事、已经确立但还没解决的关键线索。三到六句，只写已经发生的，不要推测后续。',
     '2. characters：每个真正参与了剧情的角色一条。写这个角色**已经确立的处境、立场、掌握的信息、和玩家之间的关系变化**，不要复述他说过的台词，也不要写他的心理活动。没有变化的角色不要列。',
     '',
     '# 硬性要求',
     '1. 只写故事里真实发生过的事。没有依据的内容一律不写，不要补全，不要推测。',
-    '2. 有上一版摘要时，在它的基础上**更新**：已经写过的进展保留，新发生的补上，被推翻的改掉。不要重复罗列同一件事。',
+    '2. 你拿到的是从开场到现在的完整剧情。写的是**当前状态**，不是剧情经过：同一件事只写它最后落到了什么结果，不要按时间顺序复述一遍。',
     '3. 每条控制在两到四句，具体到可以据此回想是哪一幕。',
     '4. 中文。',
     '',
@@ -125,7 +116,7 @@ function firstLine(text: string): string {
 
 /**
  * Build the user message one tracking run sends.
- * @param transcript - story so far, oldest first.
+ * @param transcript - the whole story so far, oldest first.
  * @param turn - newest beat the transcript reaches.
  * @returns the message text.
  */
@@ -134,7 +125,7 @@ export function buildTrackerMessage(transcript: string, turn: number): string {
     return `（第 ${turn} 轮之前的剧情还没有写入舞台，请输出空摘要。）\n\n{"world":"","characters":[]}`
   }
   return [
-    `# 到目前为止的剧情（写到第 ${turn} 轮）`,
+    `# 剧情全文（从开场到第 ${turn} 轮）`,
     transcript,
     '',
     '按上面的要求输出这一版进展摘要。',

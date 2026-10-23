@@ -54,14 +54,25 @@ export interface TrackerModelChoice {
   readonly model: string
 }
 
+/** Which of the two schedules a workspace uses. */
+export type TrackerTrigger = 'turns' | 'minutes'
+
 /** Trigger settings for one tavern workspace. */
 export interface TrackerConfig {
   readonly schema: number
   /** Whether automatic runs are enabled at all. */
   readonly enabled: boolean
-  /** Run after this many new beats; `0` disables the turn trigger. */
+  /**
+   * Which schedule is active.
+   *
+   * The two are alternatives, not a race: a workspace picks the one that fits
+   * how it is played. "Every N turns" suits a chat driven by play; "every N
+   * minutes" suits one left running.
+   */
+  readonly trigger: TrackerTrigger
+  /** Run after this many new beats, when `trigger` is `turns`. */
   readonly everyTurns: number
-  /** Run after this many minutes; `0` disables the time trigger. */
+  /** Run after this many minutes, when `trigger` is `minutes`. */
   readonly everyMinutes: number
   /** Longest transcript forwarded; older lines are dropped from the front. */
   readonly maxTranscriptChars: number
@@ -103,7 +114,13 @@ export interface TrackerSummary {
   readonly characters: readonly CharacterProgress[]
   /** Characters of transcript this run was given. */
   readonly transcriptChars: number
-  /** Beats covered since the previous ledger; absent on the first run. */
+  /**
+   * Newest turn covered by the previous ledger; absent on the first run.
+   *
+   * A run always reads the whole story, so this is not the range it summarised
+   * — it records where the previous ledger stopped, which is what lets the
+   * panel show how far the story has moved since.
+   */
   readonly sinceTurn?: number
 }
 
@@ -152,9 +169,10 @@ export function defaultTrackerConfig(): TrackerConfig {
   return {
     schema: TRACKER_SCHEMA,
     enabled: false,
+    trigger: 'turns',
     everyTurns: 10,
-    everyMinutes: 0,
-    maxTranscriptChars: 60_000,
+    everyMinutes: 30,
+    maxTranscriptChars: 200_000,
   }
 }
 
@@ -201,14 +219,36 @@ export function normalizeTrackerConfig(value: unknown): TrackerConfig {
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     throw new TrackerConfigInvalidError('enabled 必须是布尔值')
   }
+  // Older files carried both schedules with `0` meaning "off". A stored
+  // setting stays meaningful either way: a file with the minute trigger set
+  // migrates to that trigger rather than silently switching to turn counting.
+  const storedTrigger = record.trigger
+  if (storedTrigger !== undefined && storedTrigger !== 'turns' && storedTrigger !== 'minutes') {
+    throw new TrackerConfigInvalidError('触发方式只能是 turns 或 minutes')
+  }
+  // Older files used `0` to mean "this schedule is off". Now that the two
+  // schedules are alternatives, `0` is not a value the UI can produce; a stored
+  // one becomes the default interval instead of failing the whole file.
+  const legacyEveryTurns = record.everyTurns === 0 ? defaults.everyTurns : record.everyTurns
+  const legacyEveryMinutes = record.everyMinutes === 0 ? defaults.everyMinutes : record.everyMinutes
+  const everyTurns = integerIn(legacyEveryTurns, '每多少轮追踪一次',
+    TRACKER_LIMITS.everyTurns.min, TRACKER_LIMITS.everyTurns.max, defaults.everyTurns)
+  const everyMinutes = integerIn(legacyEveryMinutes, '每多少分钟追踪一次',
+    TRACKER_LIMITS.everyMinutes.min, TRACKER_LIMITS.everyMinutes.max, defaults.everyMinutes)
+  const trigger: TrackerTrigger = storedTrigger === 'minutes' || storedTrigger === 'turns'
+    ? storedTrigger
+    // No `trigger` field: an older file. A positive minute interval means the
+    // time schedule was in use; otherwise the turn schedule was.
+    : typeof record.everyMinutes === 'number' && record.everyMinutes > 0
+      ? 'minutes'
+      : 'turns'
   const model = modelChoice(record.model)
   return {
     schema: TRACKER_SCHEMA,
     enabled: enabled === true,
-    everyTurns: integerIn(record.everyTurns, '每多少轮追踪一次',
-      0, TRACKER_LIMITS.everyTurns.max, defaults.everyTurns),
-    everyMinutes: integerIn(record.everyMinutes, '每多少分钟追踪一次',
-      0, TRACKER_LIMITS.everyMinutes.max, defaults.everyMinutes),
+    trigger,
+    everyTurns,
+    everyMinutes,
     maxTranscriptChars: integerIn(record.maxTranscriptChars, '对话上限字数',
       TRACKER_LIMITS.maxTranscriptChars.min, TRACKER_LIMITS.maxTranscriptChars.max,
       defaults.maxTranscriptChars),
@@ -422,9 +462,9 @@ export function trackedTurns(summaries: readonly TrackerSummary[]): number[] {
 /**
  * Whether one chat is due for an automatic run.
  *
- * The two triggers are independent and either may fire; `enabled` gates both.
- * A time trigger that has never run fires immediately, because "every N
- * minutes" on a chat that has never been tracked means "start tracking now".
+ * The two schedules are alternatives, not a race: only the configured trigger
+ * is consulted. A time trigger that has never run fires immediately, because
+ * "every N minutes" on a chat that has never been tracked means "start now".
  * @param config - workspace settings.
  * @param state - what has been tracked.
  * @param newestTurn - newest beat in the chat.
@@ -439,14 +479,41 @@ export function trackerDue(
 ): boolean {
   if (!config.enabled) return false
   if (newestTurn <= state.lastTurn) return false
-  if (config.everyTurns > 0 && newestTurn - state.lastTurn >= config.everyTurns) return true
-  if (config.everyMinutes > 0) {
-    if (state.lastAt === undefined) return true
-    const last = Date.parse(state.lastAt)
-    if (Number.isNaN(last)) return true
-    return now - last >= config.everyMinutes * 60_000
-  }
-  return false
+  if (config.trigger === 'turns') return newestTurn - state.lastTurn >= config.everyTurns
+  if (state.lastAt === undefined) return true
+  const last = Date.parse(state.lastAt)
+  if (Number.isNaN(last)) return true
+  return now - last >= config.everyMinutes * 60_000
+}
+
+/**
+ * Turns covered by a ledger that a later regeneration replaced.
+ *
+ * A ledger describes the story as it stood when it was written. Regenerating a
+ * beat it covers rewrote part of that story, so the ledger no longer matches
+ * what is on stage. The comparison is by time, not just by turn number: a
+ * replay of an already-covered beat produces a *new* turn, and a ledger written
+ * after that regeneration describes the replacement and is perfectly current.
+ * @param records - regeneration history for the chat.
+ * @param ledgerTurn - newest turn the ledger covers.
+ * @param ledgerAt - epoch milliseconds the ledger was written.
+ * @returns superseded turns inside the ledger's range, ascending.
+ */
+export function staleTurnsAfterWrite(
+  records: readonly { readonly turn: number; readonly at: string }[],
+  ledgerTurn: number,
+  ledgerAt: number,
+): number[] {
+  return records
+    .filter((record) => {
+      if (record.turn > ledgerTurn) return false
+      const at = Date.parse(record.at)
+      // An unparsable timestamp cannot prove the ledger came first, so the
+      // ledger is reported as out of date rather than silently trusted.
+      return Number.isNaN(at) || Number.isNaN(ledgerAt) || at > ledgerAt
+    })
+    .map(record => record.turn)
+    .sort((left, right) => left - right)
 }
 
 /** Write one JSON document atomically (temporary file then rename). */
