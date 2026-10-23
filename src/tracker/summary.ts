@@ -40,10 +40,33 @@ export const TRACKER_LIMITS = {
   everyMinutes: { min: 1, max: 10_080 },
   /** Longest transcript one run forwards, in characters. */
   maxTranscriptChars: { min: 2_000, max: 800_000 },
+  /** World entry: how long the model should aim for. */
+  worldChars: { min: 60, max: 4_000 },
+  /** One character entry: how long the model should aim for. */
+  characterChars: { min: 40, max: 2_000 },
+  /** Player entry: how long the model should aim for. */
+  userChars: { min: 40, max: 2_000 },
 } as const
 
+/** How far past a suggested length a section may run before it is cut. */
+export const TRACKER_LENGTH_SLACK = 2
+
+/**
+ * Longest one section may reach before the host truncates it.
+ *
+ * The suggested length is what the prompt asks for; this ceiling is what the
+ * host enforces after the fact, so a model that ignores the suggestion cannot
+ * write an unbounded ledger. The slack lets a section that runs a sentence over
+ * survive intact instead of being cut mid-clause.
+ * @param suggested - the configured suggestion, in characters.
+ * @returns the enforced ceiling, in characters.
+ */
+export function trackerSectionCeiling(suggested: number): number {
+  return Math.round(suggested * TRACKER_LENGTH_SLACK)
+}
+
 /** Largest reply one run accepts, in characters. */
-export const TRACKER_REPLY_MAX_CHARS = 8_000
+export const TRACKER_REPLY_MAX_CHARS = 12_000
 
 /** How often the host reconsiders whether a chat is due, in milliseconds. */
 export const TRACKER_POLL_MS = 60_000
@@ -56,6 +79,22 @@ export interface TrackerModelChoice {
 
 /** Which of the two schedules a workspace uses. */
 export type TrackerTrigger = 'turns' | 'minutes'
+
+/** How much text one category of the ledger may carry. */
+export interface TrackerLengthBudget {
+  /** Length the prompt asks for, in characters. */
+  readonly suggested: number
+}
+
+/** Per-category length budgets for one ledger. */
+export interface TrackerLengths {
+  /** The world entry. */
+  readonly world: TrackerLengthBudget
+  /** One character entry; every character gets the same budget. */
+  readonly character: TrackerLengthBudget
+  /** The player entry. */
+  readonly user: TrackerLengthBudget
+}
 
 /** Trigger settings for one tavern workspace. */
 export interface TrackerConfig {
@@ -76,6 +115,8 @@ export interface TrackerConfig {
   readonly everyMinutes: number
   /** Longest transcript forwarded; older lines are dropped from the front. */
   readonly maxTranscriptChars: number
+  /** How much each category of the ledger may carry. */
+  readonly lengths: TrackerLengths
   /** Model the run uses; absent follows the session default. */
   readonly model?: TrackerModelChoice
 }
@@ -99,6 +140,18 @@ export interface CharacterProgress {
   readonly progress: string
 }
 
+/**
+ * What the player has established, tracked like a cast member.
+ *
+ * The player has no card, so this entry is built purely from what they said and
+ * did on stage: their stated identity, what they have committed to, and how the
+ * cast now sees them.
+ */
+export interface UserProgress {
+  /** What the player has established or changed so far. */
+  readonly progress: string
+}
+
 /** One tracking run's result. */
 export interface TrackerSummary {
   readonly schema: number
@@ -110,6 +163,8 @@ export interface TrackerSummary {
   readonly model?: string
   /** Where the story stands: setting, stakes, and the current moment. */
   readonly world: string
+  /** The player's own established situation; absent on ledgers written before it existed. */
+  readonly user?: UserProgress
   /** One entry per character that appeared or mattered. */
   readonly characters: readonly CharacterProgress[]
   /** Characters of transcript this run was given. */
@@ -173,6 +228,14 @@ export function defaultTrackerConfig(): TrackerConfig {
     everyTurns: 10,
     everyMinutes: 30,
     maxTranscriptChars: 200_000,
+    lengths: {
+      // Long enough to carry a scene and its open questions without turning
+      // into a retelling; a character entry is shorter because it only covers
+      // that character's own situation.
+      world: { suggested: 300 },
+      character: { suggested: 180 },
+      user: { suggested: 150 },
+    },
   }
 }
 
@@ -252,7 +315,42 @@ export function normalizeTrackerConfig(value: unknown): TrackerConfig {
     maxTranscriptChars: integerIn(record.maxTranscriptChars, '对话上限字数',
       TRACKER_LIMITS.maxTranscriptChars.min, TRACKER_LIMITS.maxTranscriptChars.max,
       defaults.maxTranscriptChars),
+    lengths: lengthsOf(record.lengths, defaults.lengths),
     ...(model === undefined ? {} : { model }),
+  }
+}
+
+/**
+ * Validate the per-category length budgets.
+ *
+ * A file written before budgets existed has no `lengths` field at all; it reads
+ * as the defaults rather than failing, because a missing section is not a
+ * malformed one.
+ * @param value - candidate budgets.
+ * @param defaults - budgets to fill absent categories from.
+ * @returns complete budgets.
+ * @throws TrackerConfigInvalidError when a present value is out of range.
+ */
+function lengthsOf(value: unknown, defaults: TrackerLengths): TrackerLengths {
+  if (value === undefined || value === null) return defaults
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new TrackerConfigInvalidError('摘要长度设置必须是对象')
+  }
+  const record = value as Record<string, unknown>
+  const one = (raw: unknown, field: string, bounds: { readonly min: number; readonly max: number }, fallback: number): TrackerLengthBudget => {
+    if (raw === undefined || raw === null) return { suggested: fallback }
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new TrackerConfigInvalidError(`${field} 必须是对象`)
+    }
+    const suggested = (raw as Record<string, unknown>).suggested
+    return {
+      suggested: integerIn(suggested, `${field}的建议字数`, bounds.min, bounds.max, fallback),
+    }
+  }
+  return {
+    world: one(record.world, '世界摘要', TRACKER_LIMITS.worldChars, defaults.world.suggested),
+    character: one(record.character, '角色摘要', TRACKER_LIMITS.characterChars, defaults.character.suggested),
+    user: one(record.user, '玩家摘要', TRACKER_LIMITS.userChars, defaults.user.suggested),
   }
 }
 
@@ -438,12 +536,19 @@ export function parseTrackerSummary(value: unknown): TrackerSummary | undefined 
       ...(typeof entry.id === 'string' ? { id: entry.id } : {}),
     })
   }
+  const userEntry = typeof record.user === 'object' && record.user !== null && !Array.isArray(record.user)
+    ? (record.user as Record<string, unknown>).progress
+    : undefined
+  const user = typeof userEntry === 'string' && userEntry.trim().length > 0
+    ? { progress: userEntry.trim() }
+    : undefined
   return {
     schema: TRACKER_SCHEMA,
     turn: record.turn,
     at: record.at,
     world: record.world,
     characters,
+    ...(user === undefined ? {} : { user }),
     transcriptChars: typeof record.transcriptChars === 'number' ? record.transcriptChars : 0,
     ...(typeof record.model === 'string' ? { model: record.model } : {}),
     ...(typeof record.sinceTurn === 'number' ? { sinceTurn: record.sinceTurn } : {}),

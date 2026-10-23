@@ -1815,6 +1815,78 @@ export const TOOLBOX_CSS = `
 .dshtavern-tracker-chat-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .dshtavern-tracker-chat-title { font-size: var(--tv-fs-body); font-weight: 500; }
 
+/* Sub-page strip. Three equal tabs, the active one underlined in the accent so
+   it reads as a section of one panel rather than three buttons. */
+.dshtavern-tracker-tabbar {
+  display: flex;
+  gap: 2px;
+  border-bottom: var(--tv-hairline) solid var(--dsw-alias-border-l1);
+  min-width: 0;
+}
+.dshtavern-tracker-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: calc(8px * var(--tv-scale)) calc(10px * var(--tv-scale));
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: var(--tv-fs-body);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.dshtavern-tracker-tab:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
+.dshtavern-tracker-tab[data-active='true'] {
+  color: var(--tv-accent);
+  border-bottom-color: var(--tv-accent);
+  font-weight: 500;
+}
+.dshtavern-tracker-tab:disabled { opacity: 0.45; cursor: default; }
+.dshtavern-tracker-pane { display: flex; flex-direction: column; gap: calc(12px * var(--tv-scale)); min-width: 0; }
+.dshtavern-tracker-empty {
+  padding: calc(24px * var(--tv-scale)) calc(16px * var(--tv-scale));
+  border: var(--tv-hairline) dashed var(--dsw-alias-border-l1);
+  border-radius: var(--tv-radius-lg);
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--tv-fs-small);
+  line-height: 1.7;
+  text-align: center;
+}
+
+/* Length presets: four tiles in one row, wrapping to two on narrow windows. */
+.dshtavern-tracker-presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(6px * var(--tv-scale)); }
+.dshtavern-tracker-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: calc(8px * var(--tv-scale)) calc(10px * var(--tv-scale));
+  border: var(--tv-hairline) solid var(--dsw-alias-border-l1);
+  border-radius: var(--tv-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.dshtavern-tracker-preset:hover:not(:disabled) { border-color: color-mix(in srgb, var(--tv-accent) 45%, transparent); }
+.dshtavern-tracker-preset[data-active='true'] {
+  border-color: var(--tv-accent);
+  background: color-mix(in srgb, var(--tv-accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px var(--tv-accent);
+}
+.dshtavern-tracker-preset:disabled { opacity: 0.5; cursor: default; }
+.dshtavern-tracker-preset-name { font-size: var(--tv-fs-body); font-weight: 500; }
+.dshtavern-tracker-preset-hint { font-size: calc(var(--tv-fs-small) * 0.95); color: var(--dsw-alias-label-secondary); line-height: 1.4; }
+
+/* The newest ledger carries a slightly stronger frame: it is the one a player
+   reads mid-scene, while older ones are reference. */
+.dshtavern-tracker-summary-newest { border-color: color-mix(in srgb, var(--tv-accent) 40%, var(--dsw-alias-border-l1)); }
+
 /* An error is free text from a provider: it must never widen the panel. */
 .dshtavern-tracker-error {
   padding: calc(8px * var(--tv-scale)) calc(11px * var(--tv-scale));
@@ -1867,6 +1939,7 @@ export const TOOLBOX_CSS = `
 .dshtavern-tracker-entry-name { font-size: var(--tv-fs-name); font-weight: 500; color: var(--tv-accent); }
 @media (max-width: 620px) {
   .dshtavern-tracker-triggers { grid-template-columns: minmax(0, 1fr); }
+  .dshtavern-tracker-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dshtavern-tracker-status-actions { margin-left: 0; width: 100%; }
   .dshtavern-tracker-status-actions .dshtavern-button { flex: 1 1 0; }
   .dshtavern-tracker-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }

@@ -1,10 +1,11 @@
 /**
  * Story tracker panel for the tavern toolbox.
  *
- * Three parts, top to bottom: where the tracking stands right now, the two
- * settings that control it, and the ledgers each run produced. A run happens on
- * the host's own schedule; this panel only configures it and reads the result,
- * so opening it never spends a model call.
+ * Three sub-pages behind one tab strip: the newest ledger, the run history, and
+ * the settings. A run happens on the host's own schedule; this panel only
+ * configures it and reads the result, so opening it never spends a model call.
+ * The newest ledger is separated from the rest because that is what a player
+ * checks while playing — the history is for going back, not for skimming.
  */
 import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -12,6 +13,22 @@ import { CLASS } from './styles.js'
 
 /** Which of the two schedules a workspace uses. */
 export type TrackerTriggerView = 'turns' | 'minutes'
+
+/** Which sub-page the panel shows. */
+export type TrackerTab = 'latest' | 'history' | 'settings'
+
+/** How much text one category of the ledger may carry. */
+export interface TrackerLengthView {
+  /** Length the prompt asks for, in characters. */
+  readonly suggested: number
+}
+
+/** Per-category length budgets, mirrored from the host. */
+export interface TrackerLengthsView {
+  readonly world: TrackerLengthView
+  readonly character: TrackerLengthView
+  readonly user: TrackerLengthView
+}
 
 /** Trigger settings for one tavern workspace. */
 export interface TrackerConfigView {
@@ -21,6 +38,7 @@ export interface TrackerConfigView {
   readonly everyTurns: number
   readonly everyMinutes: number
   readonly maxTranscriptChars: number
+  readonly lengths: TrackerLengthsView
   readonly model?: { readonly provider: string; readonly model: string }
 }
 
@@ -31,12 +49,19 @@ export interface CharacterProgressView {
   readonly progress: string
 }
 
+/** The player's entry in a ledger. */
+export interface UserProgressView {
+  readonly progress: string
+}
+
 /** One tracking run's result. */
 export interface TrackerSummaryView {
   readonly turn: number
   readonly at: string
   readonly model?: string
   readonly world: string
+  /** Absent on ledgers written before player tracking existed. */
+  readonly user?: UserProgressView
   readonly characters: readonly CharacterProgressView[]
   readonly transcriptChars: number
   readonly sinceTurn?: number
@@ -71,7 +96,42 @@ export const TRACKER_LIMITS = {
   everyTurns: { min: 1, max: 200, unit: '轮' },
   everyMinutes: { min: 1, max: 10_080, unit: '分钟' },
   maxTranscriptChars: { min: 2_000, max: 800_000, unit: '字' },
+  worldChars: { min: 60, max: 4_000, unit: '字' },
+  characterChars: { min: 40, max: 2_000, unit: '字' },
+  userChars: { min: 40, max: 2_000, unit: '字' },
 } as const
+
+/**
+ * Ready-made length budgets.
+ *
+ * Three sizes rather than a single slider per field: the useful question is
+ * "how much summary do I want", not "how many characters should the world
+ * section be". Each preset scales the three categories together, keeping the
+ * ratio the defaults established.
+ */
+export const LENGTH_PRESETS = {
+  short: { label: '精简', hint: '几句话说清现状', world: 150, character: 100, user: 80 },
+  standard: { label: '标准', hint: '默认，够回顾也能读完', world: 300, character: 180, user: 150 },
+  long: { label: '详细', hint: '保留更多细节', world: 600, character: 360, user: 300 },
+  deep: { label: '详尽', hint: '接近章节摘要', world: 1_200, character: 700, user: 600 },
+} as const
+
+/** A preset id from {@link LENGTH_PRESETS}. */
+export type LengthPresetId = keyof typeof LENGTH_PRESETS
+
+/**
+ * Which preset a set of budgets currently matches.
+ * @param lengths - configured budgets.
+ * @returns the preset id, or `undefined` for a custom mix.
+ */
+export function lengthPresetOf(lengths: TrackerLengthsView): LengthPresetId | undefined {
+  for (const [id, preset] of Object.entries(LENGTH_PRESETS)) {
+    if (preset.world === lengths.world.suggested
+      && preset.character === lengths.character.suggested
+      && preset.user === lengths.user.suggested) return id as LengthPresetId
+  }
+  return undefined
+}
 
 /** How often the panel re-reads run state while open. */
 const REFRESH_MS = 15_000
@@ -230,30 +290,83 @@ function TriggerPicker(props: {
     createElement('span', { className: 'dshtavern-tracker-trigger-hint' }, option.hint))))
 }
 
-/** One tracked turn's ledger. */
-function SummaryCard(props: { readonly summary: TrackerSummaryView }): ReactElement {
+/**
+ * One ledger, rendered as world → player → characters.
+ *
+ * The player entry comes second because it is the reader's own position, and
+ * the cast's view of them depends on it; older ledgers without one simply skip
+ * the section.
+ * @param props - the ledger and whether it is the newest.
+ * @returns the card element.
+ */
+function SummaryCard(props: { readonly summary: TrackerSummaryView; readonly newest?: boolean }): ReactElement {
   const summary = props.summary
-  return createElement('article', { className: 'dshtavern-tracker-summary' },
-    createElement('header', { className: 'dshtavern-tracker-summary-head' },
-      createElement('span', { className: 'dshtavern-tracker-badge' }, `第 ${summary.turn} 轮`),
-      createElement('span', { className: 'dshtavern-tracker-hint' },
-        `${summary.at.replace('T', ' ').slice(0, 16)}${summary.model === undefined ? '' : ` · ${summary.model}`}`),
-      createElement('span', { className: 'dshtavern-tracker-hint dshtavern-tracker-summary-size' },
-        `${summary.transcriptChars} 字全文`)),
-    createElement('div', { className: 'dshtavern-tracker-section' },
-      createElement('div', { className: 'dshtavern-tracker-section-title' }, '世界'),
-      createElement('p', { className: 'dshtavern-tracker-text' }, summary.world)),
-    ...summary.characters.length === 0
-      ? []
-      : [createElement('div', { key: 'chars', className: 'dshtavern-tracker-section' },
-        createElement('div', { className: 'dshtavern-tracker-section-title' }, `角色（${summary.characters.length}）`),
-        ...summary.characters.map(entry => createElement('div', { key: entry.name, className: 'dshtavern-tracker-entry' },
-          createElement('span', { className: 'dshtavern-tracker-entry-name' }, entry.name),
-          createElement('p', { className: 'dshtavern-tracker-text' }, entry.progress))))])
+  return createElement('article', {
+    className: props.newest === true
+      ? 'dshtavern-tracker-summary dshtavern-tracker-summary-newest'
+      : 'dshtavern-tracker-summary',
+  },
+  createElement('header', { className: 'dshtavern-tracker-summary-head' },
+    createElement('span', { className: 'dshtavern-tracker-badge' }, `第 ${summary.turn} 轮`),
+    createElement('span', { className: 'dshtavern-tracker-hint' },
+      `${summary.at.replace('T', ' ').slice(0, 16)}${summary.model === undefined ? '' : ` · ${summary.model}`}`),
+    createElement('span', { className: 'dshtavern-tracker-hint dshtavern-tracker-summary-size' },
+      `${summary.transcriptChars} 字全文`)),
+  createElement('div', { className: 'dshtavern-tracker-section' },
+    createElement('div', { className: 'dshtavern-tracker-section-title' }, '世界'),
+    createElement('p', { className: 'dshtavern-tracker-text' }, summary.world)),
+  ...summary.user === undefined
+    ? []
+    : [createElement('div', { key: 'user', className: 'dshtavern-tracker-section' },
+      createElement('div', { className: 'dshtavern-tracker-section-title' }, '你'),
+      createElement('p', { className: 'dshtavern-tracker-text' }, summary.user.progress))],
+  ...summary.characters.length === 0
+    ? []
+    : [createElement('div', { key: 'chars', className: 'dshtavern-tracker-section' },
+      createElement('div', { className: 'dshtavern-tracker-section-title' }, `角色（${summary.characters.length}）`),
+      ...summary.characters.map(entry => createElement('div', { key: entry.name, className: 'dshtavern-tracker-entry' },
+        createElement('span', { className: 'dshtavern-tracker-entry-name' }, entry.name),
+        createElement('p', { className: 'dshtavern-tracker-text' }, entry.progress))))])
 }
 
 /**
- * Story tracker: status, schedule choice, and the ledgers so far.
+ * The length presets, as one row of choices.
+ *
+ * Picking one replaces all three budgets at once, because they only make sense
+ * relative to each other: a detailed world with a terse character entry reads
+ * as if the cast barely matters.
+ * @param props - current budgets and the change handler.
+ * @returns the preset row.
+ */
+function LengthPicker(props: {
+  readonly lengths: TrackerLengthsView
+  readonly disabled: boolean
+  readonly onChange: (lengths: TrackerLengthsView) => void
+}): ReactElement {
+  const active = lengthPresetOf(props.lengths)
+  return createElement('div', { className: 'dshtavern-tracker-presets', role: 'radiogroup', 'aria-label': '摘要篇幅预设' },
+    (Object.entries(LENGTH_PRESETS) as [LengthPresetId, typeof LENGTH_PRESETS[LengthPresetId]][]).map(([id, preset]) =>
+      createElement('button', {
+        key: id,
+        type: 'button',
+        role: 'radio',
+        'aria-checked': active === id,
+        'data-active': active === id,
+        className: 'dshtavern-tracker-preset',
+        disabled: props.disabled,
+        title: `世界 ${preset.world} 字 · 玩家 ${preset.user} 字 · 每个角色 ${preset.character} 字`,
+        onClick: () => props.onChange({
+          world: { suggested: preset.world },
+          character: { suggested: preset.character },
+          user: { suggested: preset.user },
+        }),
+      },
+      createElement('span', { className: 'dshtavern-tracker-preset-name' }, preset.label),
+      createElement('span', { className: 'dshtavern-tracker-preset-hint' }, preset.hint))))
+}
+
+/**
+ * Story tracker: newest ledger, run history, and settings behind one tab strip.
  * @param props - the workspace and chat the toolbox opened for.
  * @returns the tracker section.
  */
@@ -264,6 +377,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<TrackerTab>('latest')
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -333,48 +447,30 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
   // The host reports only superseded turns the newest ledger actually covers.
   const staleCovered = current?.staleTurns ?? []
 
-  return createElement('section', { className: 'dshtavern-tracker' },
-    // ---- Status ---------------------------------------------------------
-    createElement('div', { className: 'dshtavern-tracker-card dshtavern-tracker-status' },
-      createElement('div', { className: 'dshtavern-tracker-status-main' },
-        createElement('span', {
-          className: 'dshtavern-tracker-dot',
-          'data-tone': !draft.enabled ? 'off' : staleCovered.length > 0 ? 'warn' : 'on',
-          'aria-hidden': true,
-        }),
-        createElement('span', { className: 'dshtavern-tracker-status-text' },
-          trackerStatusText(draft, current))),
-      createElement('div', { className: 'dshtavern-tracker-status-actions' },
-        createElement('button', {
-          type: 'button',
-          className: 'dshtavern-button',
-          disabled: saving,
-          onClick: () => { void load() },
-        }, '刷新'),
-        createElement('button', {
-          type: 'button',
-          className: 'dshtavern-button dshtavern-button-primary',
-          disabled: saving || current === undefined || current.running || current.newestTurn === 0,
-          onClick: () => { void trackNow() },
-        }, current?.running === true ? '回顾中…' : '立即回顾'))),
+  const tab = activeTab
+  const latest = current?.summaries[0]
+  const history = current?.summaries.slice(1) ?? []
 
-    error === null ? null : createElement('div', { className: CLASS.bannerError }, error),
-    notice === null ? null : createElement('div', { className: CLASS.bannerNotice }, notice),
-
-    staleCovered.length === 0
+  /** Newest ledger only: what a player checks while playing. */
+  const latestPane = createElement('div', { className: 'dshtavern-tracker-pane' },
+    current === undefined || latest === undefined
+      ? createElement('div', { className: 'dshtavern-tracker-empty' },
+        current === undefined
+          ? '这个工作区还没有可以回顾的聊天。'
+          : '还没有回顾记录。点上面的「立即回顾」生成第一份。')
+      : createElement(SummaryCard, { summary: latest, newest: true }),
+    current?.lastError === undefined
       ? null
-      : createElement('div', { className: 'dshtavern-tracker-stale' },
-        createElement('span', { className: 'dshtavern-tracker-stale-title' }, '摘要已过期'),
-        createElement('span', null,
-          `第 ${staleCovered.join('、')} 轮被重新生成取代，现有摘要是按旧剧情写的。`),
-        createElement('button', {
-          type: 'button',
-          className: 'dshtavern-button',
-          disabled: saving || current?.running === true,
-          onClick: () => { void trackNow() },
-        }, '重新回顾')),
+      : createElement('div', { className: 'dshtavern-tracker-error' }, current.lastError))
 
-    // ---- Settings -------------------------------------------------------
+  /** Older ledgers, newest first. */
+  const historyPane = createElement('div', { className: 'dshtavern-tracker-pane' },
+    history.length === 0
+      ? createElement('div', { className: 'dshtavern-tracker-empty' }, '还没有更早的回顾记录。')
+      : history.map(summary => createElement(SummaryCard, { key: summary.turn, summary })))
+
+  /** Settings: schedule, transcript ceiling, and the per-category budgets. */
+  const settingsPane = createElement('div', { className: 'dshtavern-tracker-pane' },
     createElement('div', { className: 'dshtavern-tracker-group' },
       createElement('div', { className: 'dshtavern-tracker-group-head' },
         createElement('div', { className: 'dshtavern-tracker-group-title' }, '自动回顾'),
@@ -430,50 +526,129 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
         bounds: TRACKER_LIMITS.maxTranscriptChars,
         disabled: saving,
         onChange: value => setDraft({ ...draft, maxTranscriptChars: value }),
-      }),
+      })),
 
-      createElement('div', { className: 'dshtavern-tracker-actions' },
+    createElement('div', { className: 'dshtavern-tracker-group' },
+      createElement('div', { className: 'dshtavern-tracker-group-head' },
+        createElement('div', { className: 'dshtavern-tracker-group-title' }, '摘要篇幅'),
+        createElement('span', { className: 'dshtavern-tracker-hint' }, '建议字数；模型超出这个篇幅时会被裁掉')),
+      createElement('div', { className: 'dshtavern-tracker-group-note' },
+        '三部分各自独立计字。调小更省 token、更容易扫读；调大能留住更多细节，但下一轮的提示词也会更长。'),
+      createElement(LengthPicker, {
+        lengths: draft.lengths,
+        disabled: saving,
+        onChange: lengths => setDraft({ ...draft, lengths }),
+      }),
+      createElement(NumberRow, {
+        label: '世界',
+        hint: '地点、正在发生的事、还没解决的线索。',
+        value: draft.lengths.world.suggested,
+        bounds: TRACKER_LIMITS.worldChars,
+        disabled: saving,
+        onChange: value => setDraft({ ...draft, lengths: { ...draft.lengths, world: { suggested: value } } }),
+      }),
+      createElement(NumberRow, {
+        label: '你（玩家）',
+        hint: '玩家已经表明的身份、做过并被看见的事、角色现在怎么看玩家。',
+        value: draft.lengths.user.suggested,
+        bounds: TRACKER_LIMITS.userChars,
+        disabled: saving,
+        onChange: value => setDraft({ ...draft, lengths: { ...draft.lengths, user: { suggested: value } } }),
+      }),
+      createElement(NumberRow, {
+        label: '每个角色',
+        hint: '每个角色各自的上限，不是全部角色加起来。',
+        value: draft.lengths.character.suggested,
+        bounds: TRACKER_LIMITS.characterChars,
+        disabled: saving,
+        onChange: value => setDraft({ ...draft, lengths: { ...draft.lengths, character: { suggested: value } } }),
+      })),
+
+    createElement('div', { className: 'dshtavern-tracker-actions' },
+      createElement('button', {
+        type: 'button',
+        className: 'dshtavern-button',
+        disabled: saving,
+        onClick: () => { void persist(draft, true) },
+      }, '恢复默认'),
+      createElement('button', {
+        type: 'button',
+        className: 'dshtavern-button dshtavern-button-primary',
+        disabled: saving || !dirty,
+        onClick: () => { void persist(draft) },
+      }, '保存')))
+
+  return createElement('section', { className: 'dshtavern-tracker' },
+    // ---- Status (always visible: it answers "what happens next") ----------
+    createElement('div', { className: 'dshtavern-tracker-card dshtavern-tracker-status' },
+      createElement('div', { className: 'dshtavern-tracker-status-main' },
+        createElement('span', {
+          className: 'dshtavern-tracker-dot',
+          'data-tone': !draft.enabled ? 'off' : staleCovered.length > 0 ? 'warn' : 'on',
+          'aria-hidden': true,
+        }),
+        createElement('span', { className: 'dshtavern-tracker-status-text' },
+          trackerStatusText(draft, current))),
+      createElement('div', { className: 'dshtavern-tracker-status-actions' },
         createElement('button', {
           type: 'button',
           className: 'dshtavern-button',
           disabled: saving,
-          onClick: () => { void persist(draft, true) },
-        }, '恢复默认'),
+          onClick: () => { void load() },
+        }, '刷新'),
         createElement('button', {
           type: 'button',
           className: 'dshtavern-button dshtavern-button-primary',
-          disabled: saving || !dirty,
-          onClick: () => { void persist(draft) },
-        }, '保存'))),
+          disabled: saving || current === undefined || current.running || current.newestTurn === 0,
+          onClick: () => { void trackNow() },
+        }, current?.running === true ? '回顾中…' : '立即回顾'))),
 
-    // ---- Ledgers --------------------------------------------------------
-    createElement('div', { className: 'dshtavern-tracker-records' },
-      createElement('div', { className: 'dshtavern-tracker-head' },
-        createElement('div', { className: 'dshtavern-tracker-title' }, '回顾记录'),
-        createElement('span', { className: 'dshtavern-tracker-hint' },
-          current === undefined || current.newestTurn === 0
-            ? '还没有剧情'
-            : `最新第 ${current.newestTurn} 轮 · 已回顾 ${current.runCount} 次`)),
-      ordered.length === 0
-        ? createElement('div', { className: 'dshtavern-tracker-hint' }, '这个工作区还没有可以回顾的聊天。')
-        : ordered.map(chat => createElement('div', { key: chat.sessionId, className: 'dshtavern-tracker-chat' },
-          ordered.length === 1
-            ? null
-            : createElement('div', { className: 'dshtavern-tracker-chat-head' },
-              createElement('span', { className: 'dshtavern-tracker-chat-title' },
-                chat.sessionId === props.sessionId ? '当前会话' : chat.sessionId.slice(0, 18)),
-              createElement('span', { className: 'dshtavern-tracker-hint' },
-                chat.newestTurn === 0 ? '还没有剧情' : `最新第 ${chat.newestTurn} 轮`),
-              chat.running
-                ? createElement('span', { className: 'dshtavern-tracker-badge', 'data-tone': 'busy' }, '回顾中…')
-                : null),
-          chat.lastError === undefined
-            ? null
-            : createElement('div', { className: 'dshtavern-tracker-error' }, chat.lastError),
-          chat.summaries.length === 0
-            ? createElement('div', { className: 'dshtavern-tracker-hint' }, '还没有回顾记录。')
-            : chat.summaries.map(summary => createElement(SummaryCard, {
-              key: summary.turn,
-              summary,
-            }))))))
+    error === null ? null : createElement('div', { className: CLASS.bannerError }, error),
+    notice === null ? null : createElement('div', { className: CLASS.bannerNotice }, notice),
+
+    staleCovered.length === 0
+      ? null
+      : createElement('div', { className: 'dshtavern-tracker-stale' },
+        createElement('span', { className: 'dshtavern-tracker-stale-title' }, '摘要已过期'),
+        createElement('span', null,
+          `第 ${staleCovered.join('、')} 轮被重新生成取代，现有摘要是按旧剧情写的。`),
+        createElement('button', {
+          type: 'button',
+          className: 'dshtavern-button',
+          disabled: saving || current?.running === true,
+          onClick: () => { void trackNow() },
+        }, '重新回顾')),
+
+    // ---- Tabs -----------------------------------------------------------
+    createElement('div', { className: 'dshtavern-tracker-tabbar', role: 'tablist', 'aria-label': '回顾页面' },
+      createElement('button', {
+        type: 'button',
+        role: 'tab',
+        'aria-selected': tab === 'latest',
+        'data-active': tab === 'latest',
+        className: 'dshtavern-tracker-tab',
+        onClick: () => setActiveTab('latest'),
+      }, '最新回顾'),
+      createElement('button', {
+        type: 'button',
+        role: 'tab',
+        'aria-selected': tab === 'history',
+        'data-active': tab === 'history',
+        className: 'dshtavern-tracker-tab',
+        disabled: history.length === 0,
+        title: history.length === 0 ? '还没有更早的回顾' : undefined,
+        onClick: () => setActiveTab('history'),
+      }, `历史记录${history.length === 0 ? '' : `（${history.length}）`}`),
+      createElement('button', {
+        type: 'button',
+        role: 'tab',
+        'aria-selected': tab === 'settings',
+        'data-active': tab === 'settings',
+        className: 'dshtavern-tracker-tab',
+        onClick: () => setActiveTab('settings'),
+      }, '设置')),
+
+    tab === 'latest' ? latestPane : null,
+    tab === 'history' ? historyPane : null,
+    tab === 'settings' ? settingsPane : null)
 }

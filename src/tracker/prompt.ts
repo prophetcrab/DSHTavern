@@ -13,7 +13,8 @@
 import type { CharacterCard } from '../character-card.js'
 import type { StageEntry } from '../stage.js'
 import type { WorldState } from '../stage.js'
-import type { CharacterProgress } from './summary.js'
+import type { CharacterProgress, TrackerLengths, UserProgress } from './summary.js'
+import { trackerSectionCeiling } from './summary.js'
 
 /** Longest one ledger field may be, in characters. */
 export const TRACKER_FIELD_MAX_CHARS = 4_000
@@ -24,6 +25,7 @@ export const TRACKER_CHARACTER_MAX = 40
 /** One ledger as the model returned it. */
 export interface ParsedLedger {
   readonly world: string
+  readonly user?: UserProgress
   readonly characters: readonly CharacterProgress[]
 }
 
@@ -65,16 +67,20 @@ export function renderTranscript(
  *
  * Every run reads the whole story from the beginning, so the ledger always
  * describes the current story as a whole rather than a slice of it. The
- * instructions separate the three things a reader needs from a long story:
- * where the world stands, what each character has come to know or want, and
- * what is still unresolved. It explicitly forbids inventing progress, because
- * the ledger is read as fact.
- * @param input - cast and current world state.
+ * instructions separate the four things a reader needs from a long story:
+ * where the world stands, where the player stands, what each character has come
+ * to know or want, and what is still unresolved. It explicitly forbids
+ * inventing progress, because the ledger is read as fact.
+ *
+ * Length budgets are stated per section, and the same numbers are enforced by
+ * the host after parsing: the prompt asks, the host guarantees.
+ * @param input - cast, current world state, and the length budgets.
  * @returns the system prompt text.
  */
 export function buildTrackerSystem(input: {
   readonly cards: readonly CharacterCard[]
   readonly world: WorldState
+  readonly lengths: TrackerLengths
 }): string {
   const cast = input.cards.length === 0
     ? '（没有角色卡）'
@@ -92,21 +98,25 @@ export function buildTrackerSystem(input: {
     hidden,
     '',
     '# 你要写什么',
-    '1. world：这个世界现在处于什么状态。写地点、时间、当前正在发生的事、已经确立但还没解决的关键线索。三到六句，只写已经发生的，不要推测后续。',
-    '2. characters：每个真正参与了剧情的角色一条。写这个角色**已经确立的处境、立场、掌握的信息、和玩家之间的关系变化**，不要复述他说过的台词，也不要写他的心理活动。没有变化的角色不要列。',
+    `1. world：这个世界现在处于什么状态。写地点、时间、当前正在发生的事、已经确立但还没解决的关键线索。**不超过 ${input.lengths.world.suggested} 字**。只写已经发生的，不要推测后续。`,
+    `2. user：玩家（${PLAYER_LABEL}）现在处于什么状态。写玩家已经表明的身份、已经做过并被旁人看到的事、已经给出的承诺或立场、以及角色们现在怎么看玩家。**不超过 ${input.lengths.user.suggested} 字**。不要替玩家编造没做过的决定。`,
+    `3. characters：每个真正参与了剧情的角色一条。写这个角色**已经确立的处境、立场、掌握的信息、和玩家之间的关系变化**，不要复述他说过的台词，也不要写他的心理活动。没有变化的角色不要列。**每条不超过 ${input.lengths.character.suggested} 字**。`,
     '',
     '# 硬性要求',
     '1. 只写故事里真实发生过的事。没有依据的内容一律不写，不要补全，不要推测。',
     '2. 你拿到的是从开场到现在的完整剧情。写的是**当前状态**，不是剧情经过：同一件事只写它最后落到了什么结果，不要按时间顺序复述一遍。',
-    '3. 每条控制在两到四句，具体到可以据此回想是哪一幕。',
+    '3. 每一段都要具体到可以据此回想是哪一幕，但不要超过上面给的篇幅。',
     '4. 中文。',
     '',
     '# 输出格式',
     '只输出一个 JSON 对象，第一个字符是 {，最后一个字符是 }。不要代码围栏，不要任何解释。',
-    '{"world":"世界当前状态","characters":[{"name":"角色名","progress":"这个角色的进展"}]}',
+    '{"world":"世界当前状态","user":{"progress":"玩家当前状态"},"characters":[{"name":"角色名","progress":"这个角色的进展"}]}',
     'characters 里的 name 必须来自上面的角色名单。',
   ].join('\n')
 }
+
+/** Name the ledger uses for the player, who has no card. */
+export const PLAYER_LABEL = '玩家'
 
 /** First non-empty line of a card description, trimmed for a roster line. */
 function firstLine(text: string): string {
@@ -122,7 +132,7 @@ function firstLine(text: string): string {
  */
 export function buildTrackerMessage(transcript: string, turn: number): string {
   if (transcript.length === 0) {
-    return `（第 ${turn} 轮之前的剧情还没有写入舞台，请输出空摘要。）\n\n{"world":"","characters":[]}`
+    return `（第 ${turn} 轮之前的剧情还没有写入舞台，请输出空摘要。）\n\n{"world":"","user":{"progress":""},"characters":[]}`
   }
   return [
     `# 剧情全文（从开场到第 ${turn} 轮）`,
@@ -138,14 +148,32 @@ export function buildTrackerMessage(transcript: string, turn: number): string {
  * A reply that carries no usable ledger yields `undefined` rather than an empty
  * one: the caller then keeps the previous state, so the next run retries the
  * same range instead of silently skipping it.
+ *
+ * Each section is cut to its configured ceiling. The prompt already asks for
+ * those lengths, so the cut only fires when the model overshoots; keeping it
+ * here means a long ledger cannot push the next run's prompt past the context
+ * window, which is the failure mode that compounds.
  * @param text - raw model output.
  * @param cards - cast, used to resolve a character name back to its card id.
+ * @param lengths - per-category budgets; omitted keeps the legacy flat ceiling.
  * @returns the ledger, or `undefined` when nothing usable parsed.
  */
-export function parseTrackerReply(text: string, cards: readonly CharacterCard[]): ParsedLedger | undefined {
+export function parseTrackerReply(
+  text: string,
+  cards: readonly CharacterCard[],
+  lengths?: TrackerLengths,
+): ParsedLedger | undefined {
   const json = extractJsonObject(text)
   if (json === undefined) return undefined
-  const world = typeof json.world === 'string' ? clamp(json.world.trim(), TRACKER_FIELD_MAX_CHARS) : ''
+  const worldMax = lengths === undefined ? TRACKER_FIELD_MAX_CHARS : trackerSectionCeiling(lengths.world.suggested)
+  const userMax = lengths === undefined ? TRACKER_FIELD_MAX_CHARS : trackerSectionCeiling(lengths.user.suggested)
+  const characterMax = lengths === undefined ? TRACKER_FIELD_MAX_CHARS : trackerSectionCeiling(lengths.character.suggested)
+  const world = typeof json.world === 'string' ? clamp(json.world.trim(), worldMax) : ''
+  const userText = typeof json.user === 'object' && json.user !== null && !Array.isArray(json.user)
+    ? (json.user as Record<string, unknown>).progress
+    : undefined
+  const userProgress = typeof userText === 'string' ? clamp(userText.trim(), userMax) : ''
+  const user: UserProgress | undefined = userProgress.length === 0 ? undefined : { progress: userProgress }
   const byName = new Map(cards.map(card => [card.name, card]))
   const characters: CharacterProgress[] = []
   const seen = new Set<string>()
@@ -161,14 +189,14 @@ export function parseTrackerReply(text: string, cards: readonly CharacterCard[])
     const card = byName.get(name)
     characters.push({
       name,
-      progress: clamp(progress, TRACKER_FIELD_MAX_CHARS),
+      progress: clamp(progress, characterMax),
       ...(card === undefined ? {} : { id: card.id }),
     })
   }
-  // A ledger with neither a world state nor any character entry says nothing;
-  // storing it would mark the range as tracked.
-  if (world.length === 0 && characters.length === 0) return undefined
-  return { world, characters }
+  // A ledger with no world state, no player entry, and no character entry says
+  // nothing; storing it would mark the range as tracked.
+  if (world.length === 0 && user === undefined && characters.length === 0) return undefined
+  return { world, characters, ...(user === undefined ? {} : { user }) }
 }
 
 /** Cut one field to the ledger's per-field ceiling. */

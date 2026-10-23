@@ -202,7 +202,7 @@
   - 重演期间舞台被原地追加（下一条 prompt 要读最新状态），落盘必须直接写这份数组，不能再拼一次 `staged`——否则每一行都会写两遍。
   - 客户端只在「最新已结束回合」且宿主报告它可重放时显示按钮；`GET /tavern/regenerate` 同时返回替换记录与 `replayableTurn`，开场刚结束、还没有 beat 的会话不会出现必然失败的按钮。
 - 用量统计子插件：工作区总量、当前会话用量、输入/输出拆分、上下文占用条、缓存命中率条、会话明细表；每 10 秒刷新。面板内容限宽 720px 居中，两卡两表双列自适应（窄窗降为单列并隐藏次要列）。实测面板数值与 DSH 自身状态栏一致（12.2k tokens、命中率 12.3%、上下文 1.05%）。
-- 测试与构建：`pnpm test` 366 项通过（24 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js`、`lib/tracker/index.js` 与浏览器 `lib/client.js`。
+- 测试与构建：`pnpm test` 374 项通过（24 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js`、`lib/tracker/index.js` 与浏览器 `lib/client.js`。
 
 ## 九、未完成与已知问题
 
@@ -240,7 +240,7 @@
 
 ```sh
 pnpm install
-pnpm test        # 24 个文件、366 项，全离线
+pnpm test        # 24 个文件、374 项，全离线
 pnpm build       # 宿主 tsc + 浏览器 tsdown
 ```
 

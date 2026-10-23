@@ -307,7 +307,7 @@ export class TavernTrackerService extends Service {
         this.failures.set(key, '当前部署没有 LLM 服务')
         return
       }
-      const system = buildTrackerSystem({ cards: cards.cards, world })
+      const system = buildTrackerSystem({ cards: cards.cards, world, lengths: config.lengths })
       const message = buildTrackerMessage(transcript.text, newestTurn)
       let reply = ''
       let usage: TokenUsage | undefined
@@ -324,7 +324,7 @@ export class TavernTrackerService extends Service {
           throw new Error(chunk.reason.failure.message)
         }
       }
-      const parsed = parseTrackerReply(reply, cards.cards)
+      const parsed = parseTrackerReply(reply, cards.cards, config.lengths)
       if (parsed === undefined) {
         this.failures.set(key, '模型没有返回可用的摘要 JSON')
         return
@@ -336,6 +336,7 @@ export class TavernTrackerService extends Service {
         model: `${selection.provider}/${selection.model}`,
         world: parsed.world,
         characters: parsed.characters,
+        ...(parsed.user === undefined ? {} : { user: parsed.user }),
         transcriptChars: transcript.chars,
         ...(state.lastTurn > 0 ? { sinceTurn: state.lastTurn } : {}),
       }

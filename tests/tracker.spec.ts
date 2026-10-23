@@ -109,6 +109,31 @@ describe('tracker config', () => {
     expect(written.trigger).toBe('minutes')
     expect((await readTrackerConfig(directory)).everyMinutes).toBe(30)
   })
+
+  it('fills length budgets from the defaults when a file predates them', () => {
+    const config = normalizeTrackerConfig({ enabled: true, everyTurns: 5 })
+    expect(config.lengths).toEqual(defaultTrackerConfig().lengths)
+  })
+
+  it('rejects an out-of-range length budget', () => {
+    expect(() => normalizeTrackerConfig({ lengths: { world: { suggested: 5 } } }))
+      .toThrow(TrackerConfigInvalidError)
+    expect(() => normalizeTrackerConfig({ lengths: { character: 'wide' } }))
+      .toThrow(TrackerConfigInvalidError)
+  })
+
+  it('round-trips custom length budgets', async () => {
+    const directory = await workspace()
+    await writeTrackerConfig(directory, {
+      lengths: {
+        world: { suggested: 600 }, character: { suggested: 360 }, user: { suggested: 300 },
+      },
+    })
+    const stored = await readTrackerConfig(directory)
+    expect(stored.lengths.world.suggested).toBe(600)
+    expect(stored.lengths.character.suggested).toBe(360)
+    expect(stored.lengths.user.suggested).toBe(300)
+  })
 })
 
 describe('tracker scheduling', () => {
@@ -231,6 +256,7 @@ describe('tracker prompt', () => {
     const system = buildTrackerSystem({
       cards: [card()],
       world: { scene: '灯塔', facts: [], hidden: ['轴撑不到天亮'] },
+      lengths: defaultTrackerConfig().lengths,
     })
     expect(system).toContain('极光')
     expect(system).toContain('轴撑不到天亮')
@@ -239,7 +265,9 @@ describe('tracker prompt', () => {
   })
 
   it('asks for the current state of the whole story, not an incremental update', () => {
-    const system = buildTrackerSystem({ cards: [card()], world: { scene: '', facts: [], hidden: [] } })
+    const system = buildTrackerSystem({
+      cards: [card()], world: { scene: '', facts: [], hidden: [] }, lengths: defaultTrackerConfig().lengths,
+    })
     // Every run reads the complete transcript, so there is no "previous
     // ledger" section and no instruction to update one.
     expect(system).toContain('从开场到现在的完整剧情')
@@ -248,8 +276,9 @@ describe('tracker prompt', () => {
   })
 
   it('says so when there are no cards', () => {
-    expect(buildTrackerSystem({ cards: [], world: { scene: '', facts: [], hidden: [] } }))
-      .toContain('没有角色卡')
+    expect(buildTrackerSystem({
+      cards: [], world: { scene: '', facts: [], hidden: [] }, lengths: defaultTrackerConfig().lengths,
+    })).toContain('没有角色卡')
   })
 
   it('labels the transcript as the full story up to the turn', () => {
@@ -284,6 +313,44 @@ describe('tracker staleness', () => {
 })
 
 describe('tracker reply parsing', () => {
+  it('reads the player entry as well as the world and cast', () => {
+    const ledger = parseTrackerReply(JSON.stringify({
+      world: '灯塔的灯又闪了一下。',
+      user: { progress: '玩家已经答应今晚留下守灯。' },
+      characters: [{ name: '极光', progress: '他把备用灯芯让了出来。' }],
+    }), [card()])
+    expect(ledger?.user?.progress).toContain('答应今晚留下守灯')
+  })
+
+  it('keeps an old ledger readable when it has no player entry', () => {
+    const ledger = parseTrackerReply(JSON.stringify({
+      world: '雨夜', characters: [{ name: '极光', progress: '甲' }],
+    }), [])
+    expect(ledger?.user).toBeUndefined()
+    expect(ledger?.characters).toHaveLength(1)
+  })
+
+  it('cuts each section to twice its suggested length', () => {
+    const lengths = {
+      world: { suggested: 10 }, character: { suggested: 5 }, user: { suggested: 8 },
+    }
+    const ledger = parseTrackerReply(JSON.stringify({
+      world: 'W'.repeat(100),
+      user: { progress: 'U'.repeat(100) },
+      characters: [{ name: '极光', progress: 'C'.repeat(100) }],
+    }), [], lengths)
+    // The ellipsis is appended after the cut, so the body is exactly 2x suggested.
+    expect(ledger?.world.length).toBe(21)
+    expect(ledger?.user?.progress.length).toBe(17)
+    expect(ledger?.characters[0]?.progress.length).toBe(11)
+  })
+
+  it('accepts a ledger with only a player entry', () => {
+    const ledger = parseTrackerReply(JSON.stringify({ user: { progress: '玩家站在门口。' } }), [])
+    expect(ledger?.world).toBe('')
+    expect(ledger?.user?.progress).toBe('玩家站在门口。')
+  })
+
   it('reads the world entry and per-character progress', () => {
     const ledger = parseTrackerReply(JSON.stringify({
       world: '灯塔的灯又闪了一下。',
