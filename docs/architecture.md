@@ -46,6 +46,7 @@
 | `src/preview.ts` | 不调用模型的提示词预览 |
 | `src/http.ts` | loopback 校验与 JSON 响应 |
 | `src/stats/index.ts` | 子插件 `dshtavern-stats`：用量聚合与 `/tavern-stats/*` 路由 |
+| `src/tracker/` | 子插件 `dshtavern-tracker`：剧情追踪的调度、提示词、摘要存储与 `/tavern-tracker/*` 路由 |
 | `src/session.ts` | 备选的 preset 行实现，**当前 profile 未挂载**（见「未完成」） |
 
 浏览器半：
@@ -135,6 +136,27 @@
 
 **关键前提**：编排器接管了 agent loop 自己的模型调用，因此必须把各次调用上报的 `usage` 累加后作为 `usage` chunk 转发给 loop，否则 loop 记录的 assistant 消息不带用量，`tokenUsage` 投影会一直是 0。`complete()` 收集每次调用的用量，`textReply()` 在 `finish` 前发出一个合并后的 `usage` chunk。
 
+## 七之二、剧情追踪子插件
+
+`dshtavern-tracker` 是独立的插件行（`name: 'dshtavern/tracker'`），删掉该行即整体下线：`/tavern-tracker/*` 路由消失，工具箱的「剧情追踪」入口报告不可用，轮次导航不再打绿标；酒馆本体不受影响。
+
+**它不参与对话。** 追踪在后台异步运行，只读已经落盘的舞台与世界状态，调一次模型把剧情重述成一份进展摘要，写进磁盘。它不经过 agent loop、不产生 turn、不消耗当前回合的调用。
+
+**触发条件**（每工作区一份设置，两个条件谁先满足就触发一次，设为 0 即关闭）：
+
+| 条件 | 含义 |
+|---|---|
+| 每 N 轮 | 距上次追踪后新增的 beat 数达到 N |
+| 每 N 分钟 | 距上次追踪的真实时间达到 N 分钟；从未追踪过的会话按"立即到期"处理 |
+
+宿主每 60 秒扫一次已注册的酒馆工作区，读各自的 `state.<session>.json` 判断是否到期——重启后沿用同一份时间戳，不会重新计时。同一会话已有一次运行在飞时跳过，慢模型不会堆叠请求。失败只记 `lastError` 并保持 `lastTurn` 不变，下一次重试同一区间。
+
+**摘要结构**：一次运行把舞台拼成带说话人的转录（`[旁白] …` / `[角色名] …`），超过字数上限时从最旧的行开始丢弃，并把上一版摘要作为基线交给模型。输出是 JSON：一个 `world` 条目（地点、时间、正在发生的事、未解决的线索）+ 每个真正参与剧情的角色一条（处境、立场、掌握的信息、关系变化）。提示词明确要求"只写真实发生过的事"与"在上一版基础上更新"，所以增量运行不会重复罗列同一件事。
+
+**落盘**：`<tavern>/.dshtavern/tracker/` 下 `config.json`（设置）、`state.<session>.json`（上次覆盖到第几轮）、`summaries/<session>/<turn>.json`（一次一文件，文件名是它覆盖到的最新轮次）。摘要回读时任何损坏的文件被跳过，不影响其余记录。
+
+**轮次导航绿标**：轨迹导航没有可插槽位，客户端观察 `button[data-index]` 的 `aria-label` 取轮次号，对已追踪的轮次打 `data-dshtavern-tracked` 属性，样式表把它染绿。因为导轨是虚拟滚动的，`MutationObserver` 在滚动重建后重新上色；30 秒轮询一次追踪状态。没有装追踪子插件时路由不存在，导轨保持原样。
+
 ## 八、开发进度
 
 已完成并实测：
@@ -173,7 +195,7 @@
   - 重演期间舞台被原地追加（下一条 prompt 要读最新状态），落盘必须直接写这份数组，不能再拼一次 `staged`——否则每一行都会写两遍。
   - 客户端只在「最新已结束回合」且宿主报告它可重放时显示按钮；`GET /tavern/regenerate` 同时返回替换记录与 `replayableTurn`，开场刚结束、还没有 beat 的会话不会出现必然失败的按钮。
 - 用量统计子插件：工作区总量、当前会话用量、输入/输出拆分、上下文占用条、缓存命中率条、会话明细表；每 10 秒刷新。面板内容限宽 720px 居中，两卡两表双列自适应（窄窗降为单列并隐藏次要列）。实测面板数值与 DSH 自身状态栏一致（12.2k tokens、命中率 12.3%、上下文 1.05%）。
-- 测试与构建：`pnpm test` 333 项通过（23 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js` 与浏览器 `lib/client.js`。
+- 测试与构建：`pnpm test` 360 项通过（24 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js`、`lib/tracker/index.js` 与浏览器 `lib/client.js`。
 
 ## 九、未完成与已知问题
 
@@ -211,7 +233,7 @@
 
 ```sh
 pnpm install
-pnpm test        # 23 个文件、333 项，全离线
+pnpm test        # 24 个文件、360 项，全离线
 pnpm build       # 宿主 tsc + 浏览器 tsdown
 ```
 

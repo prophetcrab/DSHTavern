@@ -252,7 +252,8 @@ export const PROMPT_BLOCKS: readonly PromptBlockDefinition[] = [
     editable: true,
     defaultContent: '你现在就是「{{char}}」。只输出 {{char}} 自己的台词和这个角色自己的动作与神态。\n'
       + '不要旁白他人，不要替玩家说话，不要描写其他角色的内心，不要跳出角色。\n'
-      + '动作与神态用星号包裹，例如：*她把伞往旁边挪了挪*。',
+      + '动作与神态用星号包裹，例如：*她把伞往旁边挪了挪*。\n'
+      + '动作与台词分成两段：先写动作，空一行，再写台词。不要把动作和台词写在同一行。',
   },
   {
     id: 'dsh-runtime',

@@ -343,12 +343,98 @@ export function buildDirectorContinuation(input: DirectorPromptInput, spoken: re
 }
 
 /**
+ * One run of a character's reply: something they do, or something they say.
+ *
+ * The character prompt asks for actions in asterisks (`*她把伞收起*`), which is
+ * also how the stage renders them. Splitting the runs apart is what lets the
+ * player read a gesture as direction rather than as dialogue.
+ */
+export interface SpeechRun {
+  /** `action` is stage direction; `dialogue` is spoken text. */
+  readonly kind: 'action' | 'dialogue'
+  /** Run text, trimmed, with its delimiters removed. */
+  readonly text: string
+}
+
+/**
+ * Split one character reply into its action and dialogue runs.
+ *
+ * A run separated by a newline yields a dialogue run that trims to nothing and
+ * is dropped, so `*动作*\n\n台词` and `*动作* 台词` both produce the same two
+ * runs. `**bold**` is left alone: it is emphasis inside a run, not a delimiter.
+ * An unclosed `*` is treated as literal text rather than swallowing the rest of
+ * the reply.
+ * @param text - raw character reply.
+ * @returns the runs in reading order; empty when the reply is blank.
+ */
+export function splitSpeechRuns(text: string): SpeechRun[] {
+  const runs: SpeechRun[] = []
+  const pushDialogue = (part: string): void => {
+    const trimmed = part.trim()
+    if (trimmed.length > 0) runs.push({ kind: 'dialogue', text: trimmed })
+  }
+  let cursor = 0
+  let index = 0
+  while (index < text.length) {
+    if (text[index] !== '*') {
+      index += 1
+      continue
+    }
+    // `**` opens emphasis; skip the pair so it never reads as an action.
+    if (text[index + 1] === '*') {
+      const close = text.indexOf('**', index + 2)
+      index = close === -1 ? text.length : close + 2
+      continue
+    }
+    const close = actionCloseIndex(text, index + 1)
+    if (close === -1) {
+      index += 1
+      continue
+    }
+    pushDialogue(text.slice(cursor, index))
+    const action = text.slice(index + 1, close).trim()
+    if (action.length > 0) runs.push({ kind: 'action', text: action })
+    cursor = close + 1
+    index = close + 1
+  }
+  pushDialogue(text.slice(cursor))
+  return runs
+}
+
+/**
+ * Index of the `*` closing an action opened before `from`.
+ *
+ * The search stops at a line break: an action is a short stage direction, and
+ * letting an unmatched asterisk reach across paragraphs would turn a stray
+ * symbol into a delimiter for the rest of the reply.
+ * @param text - reply being scanned.
+ * @param from - index just past the opening asterisk.
+ * @returns the closing index, or -1 when the line has none.
+ */
+function actionCloseIndex(text: string, from: number): number {
+  for (let index = from; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '\n') return -1
+    if (char !== '*') continue
+    // `**` closes emphasis, not the action.
+    if (text[index + 1] === '*') {
+      index += 1
+      continue
+    }
+    return index
+  }
+  return -1
+}
+
+/**
  * Render one beat's ordered segments as the assistant message the player sees.
  *
- * Narration becomes a blockquote so it reads as stage direction; speech carries
- * the speaker's name in bold. The client scopes its narration styling to tavern
- * sessions (`body[data-dshtavern-story]`), so this shape is only reinterpreted
- * inside the tavern.
+ * Narration becomes a blockquote so it reads as stage direction. Speech becomes
+ * a blockquote too, but with the speaker's name as its first paragraph: the
+ * client turns that shape into a chat bubble, because a quote containing a name
+ * is the only container Markdown can produce here — raw HTML stays literal text
+ * in the chat renderer. The client scopes this styling to tavern sessions
+ * (`body[data-dshtavern-story]`), so an ordinary conversation is unaffected.
  * @param segments - narration and speech pieces in story order.
  * @returns the visible reply text.
  */
@@ -358,14 +444,38 @@ export function renderBeatMarkdown(segments: readonly BeatSegment[]): string {
     if (segment.kind === 'narration') {
       const text = segment.text.trim()
       if (text.length === 0) continue
-      parts.push(text.split('\n').map(line => `> ${line}`).join('\n'))
+      parts.push(text.split('\n').map(line => `> ${escapeBlockStart(line)}`).join('\n'))
       continue
     }
-    const text = segment.text.trim()
-    if (text.length === 0) continue
-    parts.push(`**${segment.name}**\n\n${text}`)
+    const runs = splitSpeechRuns(segment.text)
+    if (runs.length === 0) continue
+    // One quoted block per speaker turn. The name is the first paragraph so the
+    // client can tell a bubble from narration, which never carries one.
+    const blocks: string[] = [`**${segment.name}**`]
+    for (const run of runs) {
+      // An action keeps its asterisks so it renders italic; dialogue stays
+      // plain, which is what separates the two inside the bubble.
+      blocks.push(run.kind === 'action' ? `*${run.text}*` : escapeBlockStart(run.text))
+    }
+    parts.push(blocks.map(block => block.split('\n').map(line => `> ${line}`).join('\n')).join('\n>\n'))
   }
   return parts.join('\n\n')
+}
+
+/**
+ * Escape a leading character that Markdown would read as block syntax.
+ *
+ * Narration and dialogue are free text that happens to live inside a quote. A
+ * line starting with `#`, `-`, `+`, `>`, or a digit-dot list would become a
+ * heading, list, or nested quote and break the paragraph the client keys its
+ * styling on; a backslash keeps it a paragraph without changing what the player
+ * reads. Asterisks are deliberately not escaped: they carry the emphasis and
+ * action markup this renderer emits.
+ * @param line - one line of story text.
+ * @returns the line, escaped when it starts with a block marker.
+ */
+function escapeBlockStart(line: string): string {
+  return /^(?:[>#]|[-+](?=\s)|\d+[.)](?=\s))/.test(line) ? `\\${line}` : line
 }
 
 /**

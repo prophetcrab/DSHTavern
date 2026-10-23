@@ -642,16 +642,54 @@ body[data-dshtavern-story] blockquote p {
   line-height: 1.85;
 }
 body[data-dshtavern-story] blockquote p + p { margin-top: 8px; }
-/* The speech name is the only bold run the orchestrator emits on its own line. */
-body[data-dshtavern-story] p > strong:only-child,
-body[data-dshtavern-story] p:has(> strong:only-child) {
-  margin-top: 10px;
-  margin-bottom: 2px;
+
+/* ---- Speech bubble -------------------------------------------------------
+ * A character's turn is a quote whose first paragraph is the name, which is
+ * what tells it apart from narration (narration never carries a bold-only
+ * paragraph). Layout: a bubble hugging its content, with the name as a small
+ * label, actions muted, and dialogue at normal weight so the spoken line is
+ * what the eye lands on. */
+body[data-dshtavern-story] blockquote:has(> p:first-child > strong:only-child) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: fit-content;
+  max-width: min(100%, calc(640px * var(--tv-scale, 1)));
+  margin: 12px 0;
+  padding: 10px 14px 11px;
+  border: var(--tv-hairline, 0.5px) solid var(--dsw-alias-border-l1);
+  border-left: var(--tv-hairline, 0.5px) solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-lg, 16px) var(--dsw-radius-lg, 16px) var(--dsw-radius-lg, 16px) 4px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+}
+body[data-dshtavern-story] blockquote:has(> p:first-child > strong:only-child) > p {
+  font-style: normal;
+  line-height: 1.75;
+}
+/* Name label. */
+body[data-dshtavern-story] blockquote:has(> p:first-child > strong:only-child) > p:first-child {
+  margin: 0 0 2px;
+  font-size: calc(12.5px * var(--tv-scale, 1));
+  line-height: 1.4;
+}
+body[data-dshtavern-story] blockquote:has(> p:first-child > strong:only-child) > p:first-child strong {
   color: var(--dsw-alias-state-business-primary, #4f7fe0);
-  font-size: var(--dsw-font-base-16-font-size, 16px);
+  font-size: inherit;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
+/* Action: stage direction inside the bubble, quieter than the line spoken. */
+body[data-dshtavern-story] blockquote:has(> p:first-child > strong:only-child) > p:has(> em:only-child) {
+  color: var(--dsw-alias-label-secondary);
+  font-style: italic;
+  font-size: 0.95em;
+}
+body[data-dshtavern-story] blockquote:has(> p:first-child > strong:only-child) > p:has(> em:only-child) + p {
+  margin-top: 4px;
+}
+/* Breathing room between consecutive story blocks. */
+body[data-dshtavern-story] blockquote + blockquote { margin-top: 14px; }
 .dshtavern-wb-panel { display: flex; flex-direction: row; flex: 1; min-height: 0; overflow: hidden; }
 .dshtavern-wb-sidebar { display:flex; flex-direction:column; gap: calc(8px * var(--tv-scale)); flex-shrink:0; width: calc(230px * var(--tv-scale)); padding: calc(14px * var(--tv-scale)) calc(12px * var(--tv-scale)); border-right: var(--tv-hairline) solid var(--dsw-alias-border-l1); background: color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent); overflow:auto; }
 /* Side header: title row keeps its width, actions get their own row so adding
@@ -699,14 +737,6 @@ body[data-dshtavern-story] p:has(> strong:only-child) {
 .dshtavern-wb-hit { display:flex; align-items:center; justify-content:space-between; gap:8px; padding: calc(6px * var(--tv-scale)) calc(10px * var(--tv-scale)); border-radius: var(--tv-radius-sm); background: color-mix(in srgb, var(--tv-accent) 8%, transparent); font-size: var(--tv-fs-small); }
 .dshtavern-wb-hit-meta { color: var(--dsw-alias-label-secondary); }
 .dshtavern-wb-empty { padding: calc(20px * var(--tv-scale)) calc(8px * var(--tv-scale)); color: var(--dsw-alias-label-secondary); font-size: var(--tv-fs-small); line-height:1.7; }
-body[data-dshtavern-story] p:has(> strong:only-child) + p {
-  margin-top: 2px;
-  padding: 2px 0 2px 14px;
-  border-left: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) 70%, transparent);
-}
-/* Breathing room between a character's block and the next narration. */
-body[data-dshtavern-story] blockquote { margin-block: 16px; }
-body[data-dshtavern-story] blockquote + p:has(> strong:only-child) { margin-top: 18px; }
 `
 
 /**
@@ -1642,4 +1672,37 @@ export const TOOLBOX_CSS = `
   .dshtavern-agent-row-toggle { flex-direction: row; align-items: center; }
   .dshtavern-agent-input-wrap { justify-content: flex-end; }
 }
+
+/* ---- Story tracker -------------------------------------------------------
+ * Schedule settings plus the ledgers a run produced. The ledger is the reading
+ * surface, so it gets the width: one bordered card per run, world first, then
+ * one row per character. */
+.dshtavern-tracker { display:flex; flex-direction:column; gap: calc(10px * var(--tv-scale)); }
+.dshtavern-tracker-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dshtavern-tracker-toolbar .dshtavern-button-primary { margin-left:auto; }
+.dshtavern-tracker-group { display:flex; flex-direction:column; gap: calc(8px * var(--tv-scale)); padding-top: calc(10px * var(--tv-scale)); border-top: var(--tv-hairline) solid var(--dsw-alias-border-l1); }
+.dshtavern-tracker-group-title { font-size: var(--tv-fs-section); font-weight: 500; }
+.dshtavern-tracker-group-note { font-size: var(--tv-fs-small); color: var(--dsw-alias-label-secondary); line-height:1.6; }
+.dshtavern-tracker-row { display:flex; align-items:center; gap: calc(10px * var(--tv-scale)); }
+.dshtavern-tracker-row-toggle { justify-content: space-between; }
+.dshtavern-tracker-row-text { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
+.dshtavern-tracker-label { font-size: var(--tv-fs-body); }
+.dshtavern-tracker-hint { font-size: var(--tv-fs-small); color: var(--dsw-alias-label-secondary); line-height:1.55; }
+.dshtavern-tracker-input-wrap { display:flex; align-items:center; gap:6px; flex:none; }
+.dshtavern-tracker-input { width: calc(96px * var(--tv-scale)); padding: calc(6px * var(--tv-scale)) calc(9px * var(--tv-scale)); border: var(--tv-hairline) solid var(--dsw-alias-border-l1); border-radius: var(--tv-radius-sm); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-family:inherit; font-size: var(--tv-fs-body); outline:none; }
+.dshtavern-tracker-input:focus { border-color: var(--tv-accent); }
+.dshtavern-tracker-unit { font-size: var(--tv-fs-small); color: var(--dsw-alias-label-secondary); }
+.dshtavern-tracker-chat { display:flex; flex-direction:column; gap: calc(8px * var(--tv-scale)); }
+.dshtavern-tracker-chat-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dshtavern-tracker-chat-title { font-size: var(--tv-fs-body); font-weight: 500; }
+.dshtavern-tracker-chat-head .dshtavern-button { margin-left:auto; }
+.dshtavern-tracker-error { padding: calc(6px * var(--tv-scale)) calc(9px * var(--tv-scale)); border-radius: var(--tv-radius-sm); background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d94848) 10%, transparent); color: var(--dsw-alias-state-error-primary, #d94848); font-size: var(--tv-fs-small); line-height:1.55; }
+.dshtavern-tracker-summary { display:flex; flex-direction:column; gap: calc(8px * var(--tv-scale)); padding: calc(10px * var(--tv-scale)) calc(12px * var(--tv-scale)); border: var(--tv-hairline) solid var(--dsw-alias-border-l1); border-radius: var(--tv-radius-md); background: color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent); }
+.dshtavern-tracker-summary-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dshtavern-tracker-badge { padding: 1px 7px; border-radius: 999px; corner-shape:round; border: var(--tv-hairline) solid color-mix(in srgb, var(--dsw-alias-state-success-primary, #3ba55d) 45%, transparent); color: var(--dsw-alias-state-success-primary, #3ba55d); font-size: var(--tv-fs-small); font-variant-numeric: tabular-nums; }
+.dshtavern-tracker-section { display:flex; flex-direction:column; gap:4px; }
+.dshtavern-tracker-section-title { font-size: var(--tv-fs-small); color: var(--dsw-alias-label-secondary); }
+.dshtavern-tracker-text { margin:0; font-size: var(--tv-fs-body); line-height:1.7; }
+.dshtavern-tracker-entry { display:flex; flex-direction:column; gap:2px; padding-left:10px; border-left: 2px solid color-mix(in srgb, var(--tv-accent) 35%, transparent); }
+.dshtavern-tracker-entry-name { font-size: var(--tv-fs-name); font-weight: 500; color: var(--tv-accent); }
 `

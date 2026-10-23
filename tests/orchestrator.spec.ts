@@ -369,12 +369,53 @@ describe('character prompt', () => {
 })
 
 describe('beat rendering', () => {
-  it('renders narration as a blockquote and speech with a bold speaker', () => {
+  it('renders narration as a blockquote and quotes speech as a named bubble', () => {
     const markdown = renderBeatMarkdown([
       { kind: 'narration', text: '风停了。' },
       { kind: 'speech', name: '月见', text: '……谁。' },
     ])
-    expect(markdown).toBe('> 风停了。\n\n**月见**\n\n……谁。')
+    // A quote whose first paragraph is the bare name is what the client styles
+    // as a speech bubble; narration never carries one.
+    expect(markdown).toBe('> 风停了。\n\n> **月见**\n>\n> ……谁。')
+  })
+
+  it('separates a character action from the line they say', () => {
+    const markdown = renderBeatMarkdown([
+      { kind: 'speech', name: '月见', text: '*她把伞收起* 谁。' },
+    ])
+    // One quoted paragraph per run, so a gesture never reads as dialogue.
+    expect(markdown).toBe('> **月见**\n>\n> *她把伞收起*\n>\n> 谁。')
+  })
+
+  it('splits several actions and lines inside one reply', () => {
+    const markdown = renderBeatMarkdown([
+      { kind: 'speech', name: '月见', text: '*抬头看灯*\n\n转得慢了。\n\n*伸手去够扳手* 扶一下罩子。' },
+    ])
+    expect(markdown).toBe('> **月见**\n>\n> *抬头看灯*\n>\n> 转得慢了。\n>\n> *伸手去够扳手*\n>\n> 扶一下罩子。')
+  })
+
+  it('leaves emphasised dialogue alone instead of reading it as an action', () => {
+    const markdown = renderBeatMarkdown([
+      { kind: 'speech', name: '月见', text: '**别碰**那根灯芯。' },
+    ])
+    expect(markdown).toBe('> **月见**\n>\n> **别碰**那根灯芯。')
+  })
+
+  it('treats an unmatched asterisk as literal text', () => {
+    const markdown = renderBeatMarkdown([
+      { kind: 'speech', name: '月见', text: '2 * 3 等于几？' },
+    ])
+    expect(markdown).toBe('> **月见**\n>\n> 2 * 3 等于几？')
+  })
+
+  it('keeps a line that starts with block syntax inside its own paragraph', () => {
+    const markdown = renderBeatMarkdown([
+      { kind: 'narration', text: '# 不是标题' },
+      { kind: 'speech', name: '月见', text: '- 也不是列表' },
+    ])
+    // A bare `#` would become a heading and a `-` a list item, leaving the
+    // bubble without the paragraphs the client keys its styling on.
+    expect(markdown).toBe('> \\# 不是标题\n\n> **月见**\n>\n> \\- 也不是列表')
   })
 
   it('quotes every line of multi-line narration', () => {

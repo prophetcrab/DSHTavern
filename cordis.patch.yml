@@ -15,6 +15,13 @@
 - insert:
     - id: dshtavern-stats
       name: 'dshtavern/stats'
+# Story tracking runs beside the conversation on its own schedule. Removing
+# this row unregisters `/tavern-tracker/*`, the toolbox entry reports the
+# feature as unavailable, and the turn rail stops being marked; the tavern is
+# unaffected either way.
+- insert:
+    - id: dshtavern-tracker
+      name: 'dshtavern/tracker'
 - insert:
     - id: preset-tavern-rp
       name: '@deepseek-ai/dsh-agent-preset'

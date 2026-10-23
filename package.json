@@ -23,6 +23,10 @@
       "types": "./lib/types/stats/index.d.ts",
       "default": "./lib/stats/index.js"
     },
+    "./tracker": {
+      "types": "./lib/types/tracker/index.d.ts",
+      "default": "./lib/tracker/index.js"
+    },
     "./locale/*.json": "./locale/*.json",
     "./stats/locale/*.json": "./locale-stats/*.json",
     "./package.json": "./package.json"

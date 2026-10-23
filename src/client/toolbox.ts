@@ -18,6 +18,8 @@ import { AgentPanel } from './agent.js'
 import { CharacterCardTool } from './characters.js'
 import { WorldbookWorkbench } from './worldbook.js'
 import { UsagePanel } from './stats.js'
+import { TrackerPanel } from './tracker.js'
+import { installTrackedTurnMarks, refreshTrackedTurns } from './tracked-marks.js'
 
 /** One registered tavern workspace, as served by `/tavern/state`. */
 export interface TavernWorkspaceRef {
@@ -35,7 +37,7 @@ export interface TavernToolboxStation {
 }
 
 /** Tool identities shown by the toolbox. */
-export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'worldbooks' | 'usage' | 'settings'
+export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'worldbooks' | 'usage' | 'tracker' | 'settings'
 
 /** Launcher position in viewport pixels (top-left corner). */
 export interface FabPosition {
@@ -305,6 +307,24 @@ export function TavernToolboxDetector(props: ToolboxDetectorProps): null {
     return () => { style.remove() }
   }, [])
 
+  // Mark the turns the tracker has already summarised. The rail is virtualized
+  // and offers no slot, so this observes it; a profile without the tracker row
+  // simply never gets the route and leaves the rail unmarked.
+  useEffect(() => {
+    const stop = installTrackedTurnMarks(props.sessionId)
+    return () => { stop() }
+  }, [props.sessionId])
+
+  useEffect(() => {
+    const station = toolbox.station
+    if (station === null) return
+    void refreshTrackedTurns(station.workspaceId, props.sessionId)
+    const timer = window.setInterval(() => {
+      void refreshTrackedTurns(station.workspaceId, props.sessionId)
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [toolbox.station, props.sessionId])
+
   return null
 }
 
@@ -321,6 +341,7 @@ const TOOLS: readonly ToolEntry[] = [
   { id: 'characters', glyph: '卡', label: '角色卡', enabled: true },
   { id: 'worldbooks', glyph: '书', label: '世界书', enabled: true },
   { id: 'usage', glyph: '量', label: '用量统计', enabled: true },
+  { id: 'tracker', glyph: '追', label: '剧情追踪', enabled: true },
   { id: 'settings', glyph: '设', label: '设置', enabled: false },
 ]
 
@@ -460,7 +481,14 @@ function ToolWindow(): ReactElement | null {
               workspacePath: station.workspacePath,
               sessionId: station.sessionId,
             })
-            : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
+            : tool === 'tracker'
+              ? createElement(TrackerPanel, {
+                workspaceId: station.workspaceId,
+                workspaceTitle: station.workspaceTitle,
+                workspacePath: station.workspacePath,
+                sessionId: station.sessionId,
+              })
+              : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
 }
 
 /** How far the pointer must travel before a press becomes a drag. */
