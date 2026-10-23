@@ -18,8 +18,18 @@ export const REPLY_TARGET_ATTRIBUTE = 'data-dshtavern-reply'
 /** Stylesheet element id, so a second install cannot duplicate the rules. */
 const STYLE_ID = 'dshtavern-reply-targets'
 
-/** Separator the prefilled draft uses between the name and the line. */
-export const REPLY_SEPARATOR = '：'
+/**
+ * Prefix the composer receives when the player picks a speaker.
+ *
+ * Reads as an addressed line rather than a script-style speaker tag, so the
+ * player finishes a sentence ("对白鹭说，你先别动") instead of writing dialogue
+ * in a transcript format.
+ * @param name - the speaker being addressed.
+ * @returns the prefilled prefix, ending where the player starts typing.
+ */
+export function replyPrefix(name: string): string {
+  return `对${name}说：`
+}
 
 /** Rules that make the name read as a control without moving anything. */
 const REPLY_CSS = `
@@ -98,7 +108,7 @@ export function markReplyTargets(): void {
  */
 export function startReply(actions: InputActions | undefined, name: string): void {
   if (actions === undefined) return
-  actions.setDraft(`${name}${REPLY_SEPARATOR}`)
+  actions.setDraft(replyPrefix(name))
   // The composer is a contenteditable beside the slice that owns this handler;
   // focusing it is what lets the player type without a second click.
   const editor = document.querySelector<HTMLElement>('[contenteditable="true"]')

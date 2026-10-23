@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REPLY_SEPARATOR, speakerNameOf } from '../src/client/reply-to.ts'
+import { replyPrefix, speakerNameOf } from '../src/client/reply-to.ts'
 
 /**
  * Minimal element stub standing in for the rendered transcript.
@@ -46,9 +46,9 @@ describe('speaker name detection', () => {
     expect(speakerNameOf(paragraph({ isFirstChild: true, name: '   ' }) as never)).toBeUndefined()
   })
 
-  it('separates the prefilled name from the line the player writes', () => {
-    // The tavern routes a reply to whoever the player names, so the separator is
-    // part of the feature's contract with the orchestrator.
-    expect(REPLY_SEPARATOR).toBe('：')
+  it('prefills an addressed line rather than a script-style speaker tag', () => {
+    // The tavern routes a reply to whoever the player names, so the prefix is
+    // what carries that name; it must read as prose the player finishes.
+    expect(replyPrefix('白鹭')).toBe('对白鹭说：')
   })
 })

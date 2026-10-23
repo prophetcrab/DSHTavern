@@ -58,7 +58,7 @@
 |---|---|
 | `src/client/index.ts` | 面板注册：`main`、`sidebar.panellist`、`conversation.input.left`、`shell.overlay`；酒馆列表与新建/收编/取消标记 |
 | `src/client/toolbox.ts` | 悬浮启动器、图标浮层、子窗口容器；每 15 秒刷新酒馆列表 |
-| `src/client/reply-to.ts` | 点气泡里的角色名 → 把「角色名：」预填进输入框，让下一句直接对这个人说 |
+| `src/client/reply-to.ts` | 点气泡里的角色名 → 把「对角色名说：」预填进输入框，让下一句直接对这个人说 |
 | `src/client/characters.ts` | 角色卡列表与编辑表单 |
 | `src/client/worldbook.ts` | 世界书条目编辑与触发预览 |
 | `src/client/prompt.ts` | 提示词编排：角色/导演切换、拖拽排序、启停、编辑、预览、恢复默认 |
