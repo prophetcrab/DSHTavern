@@ -10,6 +10,7 @@
 import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { CLASS } from './styles.js'
+import { SubTabPane, SubTabs } from './sub-tabs.js'
 
 /** Which of the two schedules a workspace uses. */
 export type TrackerTriggerView = 'turns' | 'minutes'
@@ -452,7 +453,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
   const history = current?.summaries.slice(1) ?? []
 
   /** Newest ledger only: what a player checks while playing. */
-  const latestPane = createElement('div', { className: 'dshtavern-tracker-pane' },
+  const latestPane = createElement(SubTabPane, null,
     current === undefined || latest === undefined
       ? createElement('div', { className: 'dshtavern-tracker-empty' },
         current === undefined
@@ -464,13 +465,13 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
       : createElement('div', { className: 'dshtavern-tracker-error' }, current.lastError))
 
   /** Older ledgers, newest first. */
-  const historyPane = createElement('div', { className: 'dshtavern-tracker-pane' },
+  const historyPane = createElement(SubTabPane, null,
     history.length === 0
       ? createElement('div', { className: 'dshtavern-tracker-empty' }, '还没有更早的回顾记录。')
       : history.map(summary => createElement(SummaryCard, { key: summary.turn, summary })))
 
   /** Settings: schedule, transcript ceiling, and the per-category budgets. */
-  const settingsPane = createElement('div', { className: 'dshtavern-tracker-pane' },
+  const settingsPane = createElement(SubTabPane, null,
     createElement('div', { className: 'dshtavern-tracker-group' },
       createElement('div', { className: 'dshtavern-tracker-group-head' },
         createElement('div', { className: 'dshtavern-tracker-group-title' }, '自动回顾'),
@@ -622,33 +623,21 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
         }, '重新回顾')),
 
     // ---- Tabs -----------------------------------------------------------
-    createElement('div', { className: 'dshtavern-tracker-tabbar', role: 'tablist', 'aria-label': '回顾页面' },
-      createElement('button', {
-        type: 'button',
-        role: 'tab',
-        'aria-selected': tab === 'latest',
-        'data-active': tab === 'latest',
-        className: 'dshtavern-tracker-tab',
-        onClick: () => setActiveTab('latest'),
-      }, '最新回顾'),
-      createElement('button', {
-        type: 'button',
-        role: 'tab',
-        'aria-selected': tab === 'history',
-        'data-active': tab === 'history',
-        className: 'dshtavern-tracker-tab',
-        disabled: history.length === 0,
-        title: history.length === 0 ? '还没有更早的回顾' : undefined,
-        onClick: () => setActiveTab('history'),
-      }, `历史记录${history.length === 0 ? '' : `（${history.length}）`}`),
-      createElement('button', {
-        type: 'button',
-        role: 'tab',
-        'aria-selected': tab === 'settings',
-        'data-active': tab === 'settings',
-        className: 'dshtavern-tracker-tab',
-        onClick: () => setActiveTab('settings'),
-      }, '设置')),
+    createElement(SubTabs, {
+      ariaLabel: '回顾页面',
+      active: tab,
+      tabs: [
+        { id: 'latest', label: '最新回顾' },
+        {
+          id: 'history',
+          label: history.length === 0 ? '历史记录' : `历史记录（${history.length}）`,
+          disabled: history.length === 0,
+          ...(history.length === 0 ? { hint: '还没有更早的回顾' } : {}),
+        },
+        { id: 'settings', label: '设置', changed: dirty },
+      ],
+      onSelect: id => setActiveTab(id as TrackerTab),
+    }),
 
     tab === 'latest' ? latestPane : null,
     tab === 'history' ? historyPane : null,

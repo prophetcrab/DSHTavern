@@ -10,6 +10,7 @@ import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { fetchCharacterCards } from './characters.js'
 import { CLASS } from './styles.js'
+import { SubTabPane, SubTabs } from './sub-tabs.js'
 
 /** Per-role model selection; both fields are present together. */
 export interface AgentModelChoiceView {
@@ -316,6 +317,92 @@ function ModelPicker(props: ModelPickerProps): ReactElement {
         })))
 }
 
+/** Which sub-page the panel shows. */
+export type AgentTab = 'beat' | 'context' | 'models' | 'reply'
+
+/** One sub-page of the panel: a title, a one-line purpose, and its fields. */
+export interface AgentTabSpec {
+  readonly id: AgentTab
+  readonly label: string
+  readonly hint: string
+  readonly fields: readonly (keyof AgentConfigView)[]
+}
+
+/**
+ * The panel's sub-pages.
+ *
+ * Every setting belongs to exactly one page, so the strip doubles as a table of
+ * contents and a reader never scrolls past settings they did not open it for.
+ * `fields` drives the unsaved-edit dot on each tab.
+ */
+export const AGENT_TABS: readonly AgentTabSpec[] = [
+  {
+    id: 'beat',
+    label: '这一幕',
+    hint: '一次玩家输入里，谁开口、说多久',
+    fields: ['maxSpeechesPerBeat', 'rotateSpeakers', 'honorPlayerMention', 'unknownSpeaker'],
+  },
+  {
+    id: 'context',
+    label: '上下文',
+    hint: '每次模型调用带多少历史与设定',
+    fields: ['stageWindow', 'stageMaxChars', 'loreScanLines', 'loreMaxEntries', 'loreMaxChars', 'playerInputMax'],
+  },
+  {
+    id: 'models',
+    label: '模型',
+    hint: '导演与角色各用哪个模型',
+    fields: ['directorModel', 'characterModel'],
+  },
+  {
+    id: 'reply',
+    label: '回复长度',
+    hint: '每次回复的字数上限',
+    fields: ['maxReplyChars', 'directorMaxReplyChars', 'characterMaxReplyChars', 'reasoningReserveTokens'],
+  },
+]
+
+/**
+ * Order-independent serialization for settings comparison.
+ *
+ * `characterMaxReplyChars` is a record, so plain `JSON.stringify` would report
+ * an edit whenever the same entries come back in a different key order.
+ */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(item => canonical(item)).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`
+  }
+  return value === undefined ? 'null' : JSON.stringify(value)
+}
+
+/**
+ * Whether two settings are equivalent.
+ * @param left - one config.
+ * @param right - the other config.
+ * @returns whether every setting matches, ignoring record key order.
+ */
+export function agentConfigEqual(left: AgentConfigView, right: AgentConfigView): boolean {
+  return canonical(left) === canonical(right)
+}
+
+/**
+ * Whether one sub-page holds edits that are not persisted yet.
+ * @param config - the edited config.
+ * @param saved - the last persisted config.
+ * @param fields - the sub-page's fields.
+ * @returns whether any of those fields differ from the persisted value.
+ */
+export function agentTabChanged(
+  config: AgentConfigView,
+  saved: AgentConfigView,
+  fields: readonly (keyof AgentConfigView)[],
+): boolean {
+  return fields.some(field => canonical(config[field]) !== canonical(saved[field]))
+}
+
 /** Props of the agent orchestration panel. */
 export interface AgentPanelProps {
   readonly workspaceId: string
@@ -340,6 +427,7 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<AgentTab>('beat')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -399,8 +487,8 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
       }, '重试'))
   }
 
-  const dirty = JSON.stringify(config) !== JSON.stringify(saved)
-  const differsFromDefault = JSON.stringify(config) !== JSON.stringify(defaults)
+  const dirty = !agentConfigEqual(config, saved)
+  const differsFromDefault = !agentConfigEqual(config, defaults)
   const disabled = saving
   // Only the always-present numeric fields go through this helper; the
   // optional reply budgets have their own row with a clearable empty state.
@@ -417,40 +505,10 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
     })
   const activePreset = contextPresetOf(config)
 
-  return createElement('section', { className: 'dshtavern-agent' },
-    createElement('div', { className: 'dshtavern-agent-toolbar' },
-      createElement('span', {
-        className: 'dshtavern-pill',
-        'data-tone': saving ? 'busy' : dirty ? undefined : 'ok',
-      }, saving
-        ? '保存中…'
-        : dirty
-          ? '有未保存的修改'
-          : differsFromDefault ? '已保存（自定义）' : '已保存（默认）'),
-      createElement('button', {
-        type: 'button',
-        className: 'dshtavern-button',
-        disabled: disabled,
-        onClick: () => { void load() },
-      }, '重新读取'),
-      createElement('button', {
-        type: 'button',
-        className: 'dshtavern-button',
-        disabled: disabled,
-        onClick: () => { void persist(config, true) },
-      }, '恢复默认'),
-      createElement('button', {
-        type: 'button',
-        className: 'dshtavern-button dshtavern-button-primary',
-        disabled: disabled || !dirty,
-        onClick: () => { void persist(config) },
-      }, '保存')),
-
-    error === null ? null : createElement('div', { className: CLASS.bannerError }, error),
-    notice === null ? null : createElement('div', { className: CLASS.bannerNotice }, notice),
-
+  const beatPane = createElement(SubTabPane, null,
     createElement('div', { className: 'dshtavern-agent-group' },
-      createElement('div', { className: 'dshtavern-agent-group-title' }, '这一幕'),
+      createElement('div', { className: 'dshtavern-agent-group-note' },
+        '一次玩家输入算一幕。这里决定这一幕里谁开口，以及话头什么时候交回玩家。'),
       num('maxSpeechesPerBeat', '每幕最多发言角色数',
         '一次玩家输入最多让几个角色开口；到上限就把话头交回玩家。'),
       createElement(ToggleRow, {
@@ -480,10 +538,10 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
             update({ unknownSpeaker: event.target.value === 'first' ? 'first' : 'none' }),
         },
         createElement('option', { value: 'none' }, '结束这一幕'),
-        createElement('option', { value: 'first' }, '第一个角色顶替')))),
+        createElement('option', { value: 'first' }, '第一个角色顶替')))))
 
+  const contextPane = createElement(SubTabPane, null,
     createElement('div', { className: 'dshtavern-agent-group' },
-      createElement('div', { className: 'dshtavern-agent-group-title' }, '上下文预算'),
       createElement('div', { className: 'dshtavern-agent-group-note' },
         '这些值决定每次模型调用带上多少历史与设定。调大更连贯，也更费 token。'),
       createElement('div', { className: 'dshtavern-agent-quick' },
@@ -539,10 +597,10 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
               update({ stageMaxChars: Math.min(max, Math.max(min, Math.round(parsed))) })
             },
           }),
-          createElement('span', { className: 'dshtavern-agent-unit' }, AGENT_LIMITS.stageMaxChars.unit)))),
+          createElement('span', { className: 'dshtavern-agent-unit' }, AGENT_LIMITS.stageMaxChars.unit)))))
 
+  const modelsPane = createElement(SubTabPane, null,
     createElement('div', { className: 'dshtavern-agent-group' },
-      createElement('div', { className: 'dshtavern-agent-group-title' }, '角色分工模型'),
       createElement('div', { className: 'dshtavern-agent-group-note' },
         '留空表示跟随会话当前模型。导演与角色可用不同模型：导演负责判断，角色负责文风。'),
       createElement(ModelPicker, {
@@ -564,14 +622,66 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
         onChange: choice => update(choice === undefined
           ? { characterModel: undefined }
           : { characterModel: choice }),
-      })),
+      })))
 
+  const replyPane = createElement(SubTabPane, null,
     createElement(ReplyBudgetGroup, {
       config,
       characters,
       disabled,
       onChange: patch => update(patch),
     }))
+
+  const pane = activeTab === 'beat'
+    ? beatPane
+    : activeTab === 'context'
+      ? contextPane
+      : activeTab === 'models' ? modelsPane : replyPane
+
+  return createElement('section', { className: 'dshtavern-agent' },
+    createElement('div', { className: 'dshtavern-agent-toolbar' },
+      createElement('span', {
+        className: 'dshtavern-pill',
+        'data-tone': saving ? 'busy' : dirty ? undefined : 'ok',
+      }, saving
+        ? '保存中…'
+        : dirty
+          ? '有未保存的修改'
+          : differsFromDefault ? '已保存（自定义）' : '已保存（默认）'),
+      createElement('button', {
+        type: 'button',
+        className: 'dshtavern-button',
+        disabled: disabled,
+        onClick: () => { void load() },
+      }, '重新读取'),
+      createElement('button', {
+        type: 'button',
+        className: 'dshtavern-button',
+        disabled: disabled,
+        onClick: () => { void persist(config, true) },
+      }, '恢复默认'),
+      createElement('button', {
+        type: 'button',
+        className: 'dshtavern-button dshtavern-button-primary',
+        disabled: disabled || !dirty,
+        onClick: () => { void persist(config) },
+      }, '保存')),
+
+    error === null ? null : createElement('div', { className: CLASS.bannerError }, error),
+    notice === null ? null : createElement('div', { className: CLASS.bannerNotice }, notice),
+
+    createElement(SubTabs, {
+      ariaLabel: 'Agent 编排页面',
+      active: activeTab,
+      tabs: AGENT_TABS.map(tab => ({
+        id: tab.id,
+        label: tab.label,
+        hint: tab.hint,
+        changed: agentTabChanged(config, saved, tab.fields),
+      })),
+      onSelect: id => setActiveTab(id as AgentTab),
+    }),
+    pane)
 }
 
 /**
@@ -609,7 +719,6 @@ function ReplyBudgetGroup(props: {
   }
 
   return createElement('div', { className: 'dshtavern-agent-group' },
-    createElement('div', { className: 'dshtavern-agent-group-title' }, '回复长度'),
     createElement('div', { className: 'dshtavern-agent-group-note' },
       `留空表示不限制，由模型自身决定。字数按约 ${TOKENS_PER_CHAR} token/字换算成模型的输出上限。`),
 

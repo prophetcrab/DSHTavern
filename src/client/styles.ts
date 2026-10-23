@@ -1514,19 +1514,23 @@ export const TOOLBOX_CSS = `
   }
   .dshtavern-usage-session-row > :nth-child(4) { display: none; }
 }
-/* Agent orchestration: runtime knobs grouped by what they control. */
+/* Agent orchestration: runtime knobs grouped by what they control. The panel
+   fills the window body so its tab strip can stay fixed while one pane scrolls. */
 .dshtavern-agent {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: calc(12px * var(--tv-scale));
   width: 100%;
   max-width: calc(720px * var(--tv-scale));
   margin: 0 auto;
   padding: calc(14px * var(--tv-scale)) calc(18px * var(--tv-scale)) calc(18px * var(--tv-scale));
   box-sizing: border-box;
+  min-height: 0;
 }
 .dshtavern-agent-toolbar {
   display: flex;
+  flex: none;
   align-items: center;
   gap: calc(8px * var(--tv-scale));
   padding-bottom: calc(10px * var(--tv-scale));
@@ -1682,6 +1686,7 @@ export const TOOLBOX_CSS = `
 .dshtavern-tracker {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: calc(14px * var(--tv-scale));
   width: 100%;
   max-width: calc(760px * var(--tv-scale));
@@ -1689,6 +1694,7 @@ export const TOOLBOX_CSS = `
   padding: calc(14px * var(--tv-scale)) calc(18px * var(--tv-scale)) calc(22px * var(--tv-scale));
   box-sizing: border-box;
   min-width: 0;
+  min-height: 0;
   overflow-wrap: anywhere;
 }
 .dshtavern-tracker-card,
@@ -1723,6 +1729,7 @@ export const TOOLBOX_CSS = `
 /* Status: one sentence plus the two actions that can change it. Wraps rather
    than squeezing the sentence when the window is narrow. */
 .dshtavern-tracker-status {
+  flex: none;
   flex-direction: row;
   align-items: center;
   flex-wrap: wrap;
@@ -1808,6 +1815,13 @@ export const TOOLBOX_CSS = `
 .dshtavern-tracker-trigger-hint { font-size: var(--tv-fs-small); color: var(--dsw-alias-label-secondary); }
 
 .dshtavern-tracker-actions { display: flex; gap: 8px; justify-content: flex-end; padding-top: calc(2px * var(--tv-scale)); }
+/* The save actions stay reachable while a long settings page scrolls under them. */
+.dshtavern-subtabs-pane > .dshtavern-tracker-actions {
+  position: sticky;
+  bottom: 0;
+  padding: calc(10px * var(--tv-scale)) 0 calc(2px * var(--tv-scale));
+  background: var(--dsw-alias-bg-layer-1);
+}
 
 /* Records: a heading and a stack of ledger cards, not a card around cards. */
 .dshtavern-tracker-records { display: flex; flex-direction: column; gap: calc(10px * var(--tv-scale)); min-width: 0; }
@@ -1815,15 +1829,22 @@ export const TOOLBOX_CSS = `
 .dshtavern-tracker-chat-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .dshtavern-tracker-chat-title { font-size: var(--tv-fs-body); font-weight: 500; }
 
-/* Sub-page strip. Three equal tabs, the active one underlined in the accent so
-   it reads as a section of one panel rather than three buttons. */
-.dshtavern-tracker-tabbar {
+/* Sub-page strip shared by the tool panels. The strip stays put while the pane
+   below it scrolls, so a panel with many settings never becomes one long page.
+   Equal-width tabs, the active one underlined in the accent so it reads as a
+   section of one panel rather than as three buttons. */
+.dshtavern-subtabs {
   display: flex;
+  flex: none;
   gap: 2px;
   border-bottom: var(--tv-hairline) solid var(--dsw-alias-border-l1);
   min-width: 0;
 }
-.dshtavern-tracker-tab {
+.dshtavern-subtab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   flex: 1 1 0;
   min-width: 0;
   padding: calc(8px * var(--tv-scale)) calc(10px * var(--tv-scale));
@@ -1836,17 +1857,30 @@ export const TOOLBOX_CSS = `
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   transition: color 150ms ease, border-color 150ms ease;
 }
-.dshtavern-tracker-tab:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
-.dshtavern-tracker-tab[data-active='true'] {
+.dshtavern-subtab-label { overflow: hidden; text-overflow: ellipsis; }
+.dshtavern-subtab-changed { color: var(--tv-accent); font-size: calc(var(--tv-fs-small) * 0.8); line-height: 1; }
+.dshtavern-subtab:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
+.dshtavern-subtab[data-active='true'] {
   color: var(--tv-accent);
   border-bottom-color: var(--tv-accent);
   font-weight: 500;
 }
-.dshtavern-tracker-tab:disabled { opacity: 0.45; cursor: default; }
-.dshtavern-tracker-pane { display: flex; flex-direction: column; gap: calc(12px * var(--tv-scale)); min-width: 0; }
+.dshtavern-subtab:disabled { opacity: 0.45; cursor: default; }
+.dshtavern-subtab:focus-visible { outline: 2px solid var(--tv-accent); outline-offset: -2px; }
+/* The open page claims the leftover window height and owns the scroll. */
+.dshtavern-subtabs-pane {
+  display: flex;
+  flex-direction: column;
+  gap: calc(12px * var(--tv-scale));
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
 .dshtavern-tracker-empty {
   padding: calc(24px * var(--tv-scale)) calc(16px * var(--tv-scale));
   border: var(--tv-hairline) dashed var(--dsw-alias-border-l1);
