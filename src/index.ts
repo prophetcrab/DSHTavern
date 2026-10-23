@@ -57,6 +57,7 @@ import {
   mentionedSpeaker,
   PLAYER_INPUT_MAX,
 } from './orchestrator.js'
+import type { PreviousTurn } from './orchestrator.js'
 import { fromCardEntries } from './worldbook.js'
 import { greetingStageLine, openingNarrationStageLine, selectOpening } from './greeting.js'
 import {
@@ -1152,6 +1153,14 @@ export class TavernWorkspaceService extends Service {
     const segments: BeatSegment[] = []
     const spoken: CastMember[] = []
     const turns: BeatTurn[] = []
+    /**
+     * The last character line of this beat, once one has been produced.
+     *
+     * Later speakers answer this rather than the player's original line: one
+     * beat can hold three calls, and only the first of them is a reply to the
+     * player.
+     */
+    let lastSpeech: PreviousTurn | undefined
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
     const openingLines: Omit<StageEntry, 'seq' | 'at'>[] = []
     if (script !== undefined) {
@@ -1289,7 +1298,11 @@ export class TavernWorkspaceService extends Service {
         narration: decision.narration,
         limits: config,
       })
-      const characterMessage = buildCharacterMessage(decision.narration, playerInput)
+      const characterMessage = buildCharacterMessage(
+        decision.narration,
+        playerInput,
+        ...(lastSpeech === undefined ? [] : [lastSpeech] as const),
+      )
       const characterResult = await this.complete(options, characterSystem, [
         { role: 'user', text: characterMessage },
       ], config.characterModel, replyBudgetChars(config, 'character', card.id), config.reasoningReserveTokens)
@@ -1323,6 +1336,7 @@ export class TavernWorkspaceService extends Service {
       })
       segments.push({ kind: 'speech', name: card.name, text: speech })
       spoken.push(speaker)
+      lastSpeech = { name: card.name, text: speech }
     }
 
     // A replay commits the trimmed stage and the restored world together, so a

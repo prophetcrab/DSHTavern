@@ -537,17 +537,45 @@ export function buildCharacterSystem(input: {
   return renderPromptText(views, { char: input.card.name, user: '玩家' })
 }
 
+/** One character line already spoken this beat, as a later speaker hears it. */
+export interface PreviousTurn {
+  /** Display name of the character who spoke. */
+  readonly name: string
+  /** What they said, as produced by their own call. */
+  readonly text: string
+}
+
 /**
- * Build the user message one character receives: the beat's narration followed
- * by the player's own words.
- * @param narration - narration staged for this beat, if any.
- * @param playerInput - the player's utterance.
+ * Build the user message one character receives.
+ *
+ * The first speaker of a beat answers the player, so their message pairs the
+ * new narration with the player's words. Every later speaker answers the turn
+ * that just happened: repeating the player's original line as the thing to
+ * respond to is what made three characters in one beat all reply "不抖" to a
+ * question only one of them was asked. For those turns the player's words stay
+ * in the message as background — everyone at the table heard them — but the
+ * most recent line is the one the message ends on.
+ * @param narration - narration staged for this director turn, if any.
+ * @param playerInput - the player's utterance for the beat.
+ * @param previous - the character who spoke immediately before this turn.
  * @returns the message text.
  */
-export function buildCharacterMessage(narration: string, playerInput: string): string {
+export function buildCharacterMessage(
+  narration: string,
+  playerInput: string,
+  previous?: PreviousTurn,
+): string {
   const parts: string[] = []
+  if (previous === undefined) {
+    if (narration.trim().length > 0) parts.push(`【旁白】${narration.trim()}`)
+    parts.push(`【玩家】${playerInput.trim()}`)
+    return parts.join('\n\n')
+  }
+  // Chronological, ending on the newest thing: the player's earlier line, then
+  // the character who spoke, then the narration this turn opened with.
+  parts.push(`【玩家】（这一幕开始时）${playerInput.trim()}`)
+  parts.push(`【刚才】${previous.name}：${previous.text.trim()}`)
   if (narration.trim().length > 0) parts.push(`【旁白】${narration.trim()}`)
-  parts.push(`【玩家】${playerInput.trim()}`)
   return parts.join('\n\n')
 }
 

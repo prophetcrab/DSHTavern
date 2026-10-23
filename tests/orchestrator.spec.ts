@@ -308,9 +308,22 @@ describe('character prompt', () => {
     expect(system).not.toContain('嘴硬心软')
   })
 
-  it('passes the beat narration and the player words to the character', () => {
+  it('passes the beat narration and the player words to the first speaker', () => {
     expect(buildCharacterMessage('雨更大了。', '我推开门。')).toBe('【旁白】雨更大了。\n\n【玩家】我推开门。')
     expect(buildCharacterMessage('', '我推开门。')).toBe('【玩家】我推开门。')
+  })
+
+  it('makes a later speaker answer the line just spoken, not the player', () => {
+    const message = buildCharacterMessage('灯灭了。', '你手抖不抖？', { name: '极光', text: '不抖。' })
+    // The player's line is background now; the message ends on the newest event
+    // so the character continues the scene instead of re-answering the player.
+    expect(message).toBe('【玩家】（这一幕开始时）你手抖不抖？\n\n【刚才】极光：不抖。\n\n【旁白】灯灭了。')
+    expect(message.trimEnd().endsWith('【旁白】灯灭了。')).toBe(true)
+  })
+
+  it('keeps the previous line last when this turn staged no narration', () => {
+    const message = buildCharacterMessage('', '你手抖不抖？', { name: '极光', text: '不抖。' })
+    expect(message).toBe('【玩家】（这一幕开始时）你手抖不抖？\n\n【刚才】极光：不抖。')
   })
 
   it('renders the stage, lore tail, and duty text through the layout', () => {
