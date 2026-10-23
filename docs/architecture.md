@@ -25,7 +25,9 @@
 | `dsh.client.platform` | `web` | 浏览器半运行平台 |
 | `dsh.client.inject` | layout、sidebar | 注入依赖的客户端 UI 包 |
 
-`cordis.patch.yml` 插入 4 行：`dshtavern` 本体、`dshtavern-stats` 子插件，以及 `preset-tavern-rp`、`preset-tavern-novel` 两个内部 preset。两个 preset 都从全局 preset 名单中隐藏，由宿主按工作区 `mode` 自动绑定。
+`cordis.patch.yml` 插入 5 行：`dshtavern` 本体、`dshtavern-stats` 与 `dshtavern-tracker` 两个子插件，以及 `preset-tavern-rp`、`preset-tavern-novel` 两个内部 preset。两个 preset 都从全局 preset 名单中隐藏，由宿主按工作区 `mode` 自动绑定。
+
+插件列表里的名称与说明来自 `<specifier>/locale/en.json` 的 `meta.title` / `meta.description`，所以这两个 preset 行指向本包的 `dshtavern/preset-rp` / `dshtavern/preset-novel` 子路径（内容只是转出上游 `@deepseek-ai/dsh-agent-preset`），否则两行会因为共用上游 specifier 而显示同一个名字。
 
 旧版的 `preset-tavern`（`id: tavern`）已移除：宿主只绑定 `tavern-rp` / `tavern-novel`，且该 id 在本机所有会话的 `agentPreset` 投影中从未出现，没有遗留会话依赖它。
 
@@ -46,7 +48,8 @@
 | `src/preview.ts` | 不调用模型的提示词预览 |
 | `src/http.ts` | loopback 校验与 JSON 响应 |
 | `src/stats/index.ts` | 子插件 `dshtavern-stats`：用量聚合与 `/tavern-stats/*` 路由 |
-| `src/tracker/` | 子插件 `dshtavern-tracker`：剧情追踪的调度、提示词、摘要存储与 `/tavern-tracker/*` 路由 |
+| `src/tracker/` | 子插件 `dshtavern-tracker`：剧情回顾的调度、提示词、摘要存储与 `/tavern-tracker/*` 路由 |
+| `src/preset/rp.ts`、`src/preset/novel.ts` | 两个内部 preset 的入口，只转出上游 preset 插件；存在的理由是让每一行有自己的 locale 名称 |
 | `src/session.ts` | 备选的 preset 行实现，**当前 profile 未挂载**（见「未完成」） |
 
 浏览器半：
@@ -136,9 +139,9 @@
 
 **关键前提**：编排器接管了 agent loop 自己的模型调用，因此必须把各次调用上报的 `usage` 累加后作为 `usage` chunk 转发给 loop，否则 loop 记录的 assistant 消息不带用量，`tokenUsage` 投影会一直是 0。`complete()` 收集每次调用的用量，`textReply()` 在 `finish` 前发出一个合并后的 `usage` chunk。
 
-## 七之二、剧情追踪子插件
+## 七之二、剧情回顾子插件
 
-`dshtavern-tracker` 是独立的插件行（`name: 'dshtavern/tracker'`），删掉该行即整体下线：`/tavern-tracker/*` 路由消失，工具箱的「剧情追踪」入口报告不可用，轮次导航不再打绿标；酒馆本体不受影响。
+`dshtavern-tracker` 是独立的插件行（`name: 'dshtavern/tracker'`），删掉该行即整体下线：`/tavern-tracker/*` 路由消失，工具箱的「剧情回顾」入口报告不可用，轮次导航不再打绿标；酒馆本体不受影响。
 
 **它不参与对话。** 追踪在后台异步运行，只读已经落盘的舞台与世界状态，调一次模型把剧情重述成一份进展摘要，写进磁盘。它不经过 agent loop、不产生 turn、不消耗当前回合的调用。
 

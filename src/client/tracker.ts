@@ -91,14 +91,14 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
   try {
     body = await response.json()
   } catch {
-    throw new Error(`追踪接口不可用（HTTP ${response.status}）`)
+    throw new Error(`回顾接口不可用（HTTP ${response.status}）`)
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new Error('追踪接口返回了非对象 JSON')
+    throw new Error('回顾接口返回了非对象 JSON')
   }
   const record = body as Record<string, unknown>
   if (record.ok !== true) {
-    throw new Error(typeof record.error === 'string' ? record.error : `追踪请求失败（HTTP ${response.status}）`)
+    throw new Error(typeof record.error === 'string' ? record.error : `回顾请求失败（HTTP ${response.status}）`)
   }
   return record
 }
@@ -153,19 +153,19 @@ export function trackerStatusText(
   config: TrackerConfigView,
   chat: TrackerChatView | undefined,
 ): string {
-  if (!config.enabled) return '自动追踪已关闭，只能在下面手动点「立即追踪」。'
+  if (!config.enabled) return '自动回顾已关闭，只能在下面手动点「立即回顾」。'
   const schedule = config.trigger === 'turns'
     ? `每新增 ${config.everyTurns} 轮`
     : `每 ${config.everyMinutes} 分钟`
-  if (chat === undefined) return `${schedule}追踪一次。`
+  if (chat === undefined) return `${schedule}回顾一次。`
   const trackedThrough = chat.trackedTurns.length === 0 ? 0 : Math.max(...chat.trackedTurns)
   if (config.trigger === 'turns') {
     const pending = Math.max(0, chat.newestTurn - trackedThrough)
     const remaining = Math.max(0, config.everyTurns - pending)
-    return `${schedule}追踪一次。已到第 ${chat.newestTurn} 轮${trackedThrough === 0 ? '' : `（上次第 ${trackedThrough} 轮）`}，`
+    return `${schedule}回顾一次。已到第 ${chat.newestTurn} 轮${trackedThrough === 0 ? '' : `（上次第 ${trackedThrough} 轮）`}，`
       + (remaining === 0 ? '下一次很快就会运行。' : `再新增 ${remaining} 轮后运行。`)
   }
-  return `${schedule}追踪一次。当前已到第 ${chat.newestTurn} 轮。`
+  return `${schedule}回顾一次。当前已到第 ${chat.newestTurn} 轮。`
 }
 
 /** One labelled number input with its unit and bounds. */
@@ -292,7 +292,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
       const stored = await saveConfig(props.workspaceId, reset ? { reset: true } : { config: next })
       setDraft(stored)
       setSnapshot(current => current === null ? current : { ...current, config: stored })
-      setNotice(reset ? '已恢复默认设置' : '已保存追踪设置')
+      setNotice(reset ? '已恢复默认设置' : '已保存回顾设置')
     } catch (cause) {
       setError(errorText(cause))
     } finally {
@@ -305,7 +305,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
     setNotice(null)
     try {
       const result = await startTracking(props.workspaceId, props.sessionId)
-      setNotice(result.started ? '已开始追踪，完成后会出现在下方' : result.reason ?? '追踪没有开始')
+      setNotice(result.started ? '已开始回顾，完成后会出现在下方' : result.reason ?? '回顾没有开始')
       await load(true)
     } catch (cause) {
       setError(errorText(cause))
@@ -314,11 +314,11 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
 
   if (loading && snapshot === null) {
     return createElement('section', { className: 'dshtavern-tracker' },
-      createElement('div', { className: CLASS.hint, style: { padding: '10px 2px' } }, '读取追踪状态…'))
+      createElement('div', { className: CLASS.hint, style: { padding: '10px 2px' } }, '读取回顾状态…'))
   }
   if (snapshot === null || draft === null) {
     return createElement('section', { className: 'dshtavern-tracker' },
-      createElement('div', { className: CLASS.bannerError }, error ?? '无法读取追踪状态'),
+      createElement('div', { className: CLASS.bannerError }, error ?? '无法读取回顾状态'),
       createElement('button', { type: 'button', className: CLASS.button, onClick: () => { void load() } }, '重试'))
   }
 
@@ -353,7 +353,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
           className: 'dshtavern-button dshtavern-button-primary',
           disabled: saving || current === undefined || current.running || current.newestTurn === 0,
           onClick: () => { void trackNow() },
-        }, current?.running === true ? '追踪中…' : '立即追踪'))),
+        }, current?.running === true ? '回顾中…' : '立即回顾'))),
 
     error === null ? null : createElement('div', { className: CLASS.bannerError }, error),
     notice === null ? null : createElement('div', { className: CLASS.bannerNotice }, notice),
@@ -369,23 +369,23 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
           className: 'dshtavern-button',
           disabled: saving || current?.running === true,
           onClick: () => { void trackNow() },
-        }, '重新追踪')),
+        }, '重新回顾')),
 
     // ---- Settings -------------------------------------------------------
     createElement('div', { className: 'dshtavern-tracker-group' },
       createElement('div', { className: 'dshtavern-tracker-group-head' },
-        createElement('div', { className: 'dshtavern-tracker-group-title' }, '自动追踪'),
+        createElement('div', { className: 'dshtavern-tracker-group-title' }, '自动回顾'),
         createElement('span', {
           className: 'dshtavern-tracker-badge',
           'data-tone': dirty ? 'warn' : 'ok',
         }, saving ? '保存中…' : dirty ? '有未保存的修改' : '已保存')),
       createElement('div', { className: 'dshtavern-tracker-group-note' },
-        '追踪在后台独立运行，不占用本回合的模型调用。每次都会把从开场到现在的完整剧情读一遍，重写成一份当前状态的摘要。'),
+        '回顾在后台独立运行，不占用本回合的模型调用。每次都会把从开场到现在的完整剧情读一遍，重写成一份当前状态的摘要。'),
 
       createElement('div', { className: 'dshtavern-tracker-row dshtavern-tracker-row-toggle' },
         createElement('span', { className: 'dshtavern-tracker-row-text' },
-          createElement('span', { className: 'dshtavern-tracker-label' }, '启用自动追踪'),
-          createElement('span', { className: 'dshtavern-tracker-hint' }, '关闭后只在手动点「立即追踪」时运行。')),
+          createElement('span', { className: 'dshtavern-tracker-label' }, '启用自动回顾'),
+          createElement('span', { className: 'dshtavern-tracker-hint' }, '关闭后只在手动点「立即回顾」时运行。')),
         createElement('span', { className: 'dshtavern-switch' },
           createElement('input', {
             type: 'checkbox',
@@ -405,7 +405,7 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
       draft.trigger === 'turns'
         ? createElement(NumberRow, {
           label: '每 N 轮',
-          hint: '按新增的轮次计算：上次追踪之后又发生了几轮，达到这个数就运行一次。',
+          hint: '按新增的轮次计算：上次回顾之后又发生了几轮，达到这个数就运行一次。',
           value: draft.everyTurns,
           bounds: TRACKER_LIMITS.everyTurns,
           disabled: saving || !draft.enabled,
@@ -446,13 +446,13 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
     // ---- Ledgers --------------------------------------------------------
     createElement('div', { className: 'dshtavern-tracker-records' },
       createElement('div', { className: 'dshtavern-tracker-head' },
-        createElement('div', { className: 'dshtavern-tracker-title' }, '追踪记录'),
+        createElement('div', { className: 'dshtavern-tracker-title' }, '回顾记录'),
         createElement('span', { className: 'dshtavern-tracker-hint' },
           current === undefined || current.newestTurn === 0
             ? '还没有剧情'
-            : `最新第 ${current.newestTurn} 轮 · 已追踪 ${current.trackedTurns.length} 次`)),
+            : `最新第 ${current.newestTurn} 轮 · 已回顾 ${current.trackedTurns.length} 次`)),
       ordered.length === 0
-        ? createElement('div', { className: 'dshtavern-tracker-hint' }, '这个工作区还没有可追踪的会话。')
+        ? createElement('div', { className: 'dshtavern-tracker-hint' }, '这个工作区还没有可以回顾的聊天。')
         : ordered.map(chat => createElement('div', { key: chat.sessionId, className: 'dshtavern-tracker-chat' },
           ordered.length === 1
             ? null
@@ -462,13 +462,13 @@ export function TrackerPanel(props: TrackerPanelProps): ReactElement {
               createElement('span', { className: 'dshtavern-tracker-hint' },
                 chat.newestTurn === 0 ? '还没有剧情' : `最新第 ${chat.newestTurn} 轮`),
               chat.running
-                ? createElement('span', { className: 'dshtavern-tracker-badge', 'data-tone': 'busy' }, '追踪中…')
+                ? createElement('span', { className: 'dshtavern-tracker-badge', 'data-tone': 'busy' }, '回顾中…')
                 : null),
           chat.lastError === undefined
             ? null
             : createElement('div', { className: 'dshtavern-tracker-error' }, chat.lastError),
           chat.summaries.length === 0
-            ? createElement('div', { className: 'dshtavern-tracker-hint' }, '还没有追踪记录。')
+            ? createElement('div', { className: 'dshtavern-tracker-hint' }, '还没有回顾记录。')
             : chat.summaries.map(summary => createElement(SummaryCard, {
               key: summary.turn,
               summary,

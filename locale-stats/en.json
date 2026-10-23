@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DSH-Tavern · Usage",
-    "description": "Token spend, context occupancy, and cache-hit rate for a tavern workspace. Figures come from the durable session projections, so a reload or replay reports the same numbers. Removing this row unregisters its routes and the toolbox entry reports the feature as unavailable."
+    "description": "See what a tavern costs in tokens: spend per chat, how much went in and came out, how full the context is, and how often the cache was hit. The numbers come straight from the Harness's own records, so reopening the page shows the same values. Turn this row off to drop just this panel without touching the rest of the tavern."
   }
 }

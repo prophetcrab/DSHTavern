@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH-Tavern · Story Recap",
+    "description": "Keeps track of what has happened in a tavern. Every few turns — or every so often — it rereads the whole story from the opening and writes a recap: where the world stands now, and how far each character has come. Turns it has already covered get a green mark on the turn rail. Turn this row off to drop just this feature."
+  }
+}

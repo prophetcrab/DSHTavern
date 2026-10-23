@@ -1,7 +1,7 @@
 {
   "name": "dshtavern",
   "version": "0.1.0",
-  "description": "SillyTavern-style role-play for the DeepSeek Harness: a tavern is a workspace with a marker file, each chat is a session, and every beat is a director call plus one isolated call per speaking character.",
+  "description": "Turn the DeepSeek Harness into a role-play tavern: mark a folder as a tavern, and every chat inside it gets a director who narrates and picks who speaks while each character answers from its own card in a separate call.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -27,14 +27,28 @@
       "types": "./lib/types/tracker/index.d.ts",
       "default": "./lib/tracker/index.js"
     },
+    "./preset-rp": {
+      "types": "./lib/types/preset/rp.d.ts",
+      "default": "./lib/preset/rp.js"
+    },
+    "./preset-novel": {
+      "types": "./lib/types/preset/novel.d.ts",
+      "default": "./lib/preset/novel.js"
+    },
     "./locale/*.json": "./locale/*.json",
     "./stats/locale/*.json": "./locale-stats/*.json",
+    "./tracker/locale/*.json": "./locale-tracker/*.json",
+    "./preset-rp/locale/*.json": "./locale-preset-rp/*.json",
+    "./preset-novel/locale/*.json": "./locale-preset-novel/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
     "locale",
     "locale-stats",
+    "locale-tracker",
+    "locale-preset-rp",
+    "locale-preset-novel",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -68,6 +82,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-preset": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-layout": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.2.1-rc.2",

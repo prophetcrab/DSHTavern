@@ -22,9 +22,16 @@
 - insert:
     - id: dshtavern-tracker
       name: 'dshtavern/tracker'
+# The two tavern presets. They mount no prompt rows: host assembly is the sole
+# system-prompt source, and the presets give tavern sessions a clean scope
+# without tools or persona. They are hidden from the global preset roster and
+# bound automatically by workspace mode (role-play / novel). Each row names a
+# subpath of this package rather than the shared upstream preset module, because
+# the plugin manager reads a row's display name from `<specifier>/locale`, and a
+# shared specifier cannot tell the two rows apart.
 - insert:
     - id: preset-tavern-rp
-      name: '@deepseek-ai/dsh-agent-preset'
+      name: 'dshtavern/preset-rp'
       config:
         id: tavern-rp
         name: 酒馆 · 角色扮演
@@ -33,7 +40,7 @@
         plugins: []
 - insert:
     - id: preset-tavern-novel
-      name: '@deepseek-ai/dsh-agent-preset'
+      name: 'dshtavern/preset-novel'
       config:
         id: tavern-novel
         name: 酒馆 · 小说

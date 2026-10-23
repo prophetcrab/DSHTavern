@@ -341,7 +341,7 @@ const TOOLS: readonly ToolEntry[] = [
   { id: 'characters', glyph: '卡', label: '角色卡', enabled: true },
   { id: 'worldbooks', glyph: '书', label: '世界书', enabled: true },
   { id: 'usage', glyph: '量', label: '用量统计', enabled: true },
-  { id: 'tracker', glyph: '追', label: '剧情追踪', enabled: true },
+  { id: 'tracker', glyph: '追', label: '剧情回顾', enabled: true },
   { id: 'settings', glyph: '设', label: '设置', enabled: false },
 ]
 
