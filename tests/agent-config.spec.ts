@@ -28,7 +28,9 @@ describe('agent config defaults', () => {
     expect(config.loreMaxChars).toBe(6000)
     expect(config.playerInputMax).toBe(8000)
     expect(config.rotateSpeakers).toBe(true)
-    expect(config.honorPlayerMention).toBe(false)
+    // On by default: clicking a speaker's name in the transcript pre-fills the
+    // composer with it, and that only addresses them if naming wins the routing.
+    expect(config.honorPlayerMention).toBe(true)
     expect(config.unknownSpeaker).toBe('none')
     expect(config.directorModel).toBeUndefined()
     expect(config.characterModel).toBeUndefined()

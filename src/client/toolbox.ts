@@ -20,6 +20,8 @@ import { WorldbookWorkbench } from './worldbook.js'
 import { UsagePanel } from './stats.js'
 import { TrackerPanel } from './tracker.js'
 import { installTrackedTurnMarks, refreshTrackedTurns } from './tracked-marks.js'
+import { installReplyTargets } from './reply-to.js'
+import type { InputActions } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
 /** One registered tavern workspace, as served by `/tavern/state`. */
 export interface TavernWorkspaceRef {
@@ -250,6 +252,15 @@ export function subscribeToolboxState(listener: () => void): () => void {
 export interface ToolboxDetectorProps {
   readonly sessionId: string
   readonly useSessions: (selector: (state: { byId: Record<string, { cwd?: string }> }) => unknown) => unknown
+  /**
+   * The session's public composer actions.
+   *
+   * This row is registered in a session-scope slot, so the face is always
+   * available at runtime; it stays optional in the type because the reply
+   * affordance degrades to inert rather than failing to mount when a host omits
+   * it.
+   */
+  readonly inputActions?: InputActions
 }
 
 /**
@@ -324,6 +335,15 @@ export function TavernToolboxDetector(props: ToolboxDetectorProps): null {
     }, 30_000)
     return () => window.clearInterval(timer)
   }, [toolbox.station, props.sessionId])
+
+  // Clicking a character's name in a speech bubble pre-fills the composer with
+  // that name. Tavern-only: the marks are scoped to the story attribute, and
+  // the listener only reacts to paragraphs it marked itself.
+  useEffect(() => {
+    if (toolbox.station === null) return
+    const stop = installReplyTargets(props.inputActions)
+    return () => { stop() }
+  }, [toolbox.station, props.inputActions])
 
   return null
 }

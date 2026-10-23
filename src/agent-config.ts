@@ -80,7 +80,13 @@ export interface TavernAgentConfig {
   readonly playerInputMax: number
   /** Tell the director to alternate speakers. */
   readonly rotateSpeakers: boolean
-  /** Route to the character the player names, ahead of the director's pick. */
+  /**
+   * Route to the character the player names, ahead of the director's pick.
+   *
+   * On by default: the client pre-fills the composer with a speaker's name when
+   * the player clicks it in a transcript bubble, and that affordance is only
+   * honest if naming someone actually addresses them.
+   */
   readonly honorPlayerMention: boolean
   /** Fallback when the director names someone who is not in the cast. */
   readonly unknownSpeaker: UnknownSpeakerPolicy
@@ -198,7 +204,7 @@ export function defaultAgentConfig(): TavernAgentConfig {
     loreMaxChars: WORLDBOOK_ACTIVE_CHARS_MAX,
     playerInputMax: PLAYER_INPUT_MAX,
     rotateSpeakers: true,
-    honorPlayerMention: false,
+    honorPlayerMention: true,
     unknownSpeaker: 'none',
   }
 }

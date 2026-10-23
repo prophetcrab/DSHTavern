@@ -77,7 +77,7 @@
 ```sh
 pnpm install
 pnpm build      # 宿主 tsc + 浏览器半 tsdown
-pnpm test       # 374 项，全离线
+pnpm test       # 378 项，全离线
 pnpm typecheck
 ```
 
