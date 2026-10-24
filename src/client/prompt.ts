@@ -82,16 +82,8 @@ export function reorderVisibleBlocks(
 }
 
 /** Human-facing badge for one prompt block source. */
-/** Compact label for an injection position. */
-const POSITION_SHORT: Record<'before' | 'after' | 'tail', string> = {
-  before: '定义前',
-  after: '定义后',
-  tail: '末尾',
-}
-
 const SOURCE_LABELS: Record<PromptBlockSource, string> = {
-  template: '模板',
-  character: '角色卡',
+  template: '模板',  character: '角色卡',
   worldbook: '世界书',
   persona: '人设',
   chat: '聊天',
@@ -169,9 +161,15 @@ export async function savePromptLayout(
 export interface PreviewLoreHit {
   readonly id: string
   readonly name: string
-  readonly position: 'before' | 'after' | 'tail'
-  readonly audience: 'all' | 'director'
+  readonly visibility: 'all' | 'director' | 'characters'
   readonly chars: number
+}
+
+/** Short label for one visibility, shown beside a preview hit. */
+const VISIBILITY_SHORT: Record<PreviewLoreHit['visibility'], string> = {
+  all: '全体可见',
+  director: '仅导演',
+  characters: '指定角色',
 }
 
 /** The assembled prompt one scope produces. */
@@ -693,9 +691,9 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
         preview.lore.map(hit => createElement('span', {
           key: hit.id,
           className: 'dshtavern-preview-lore-chip',
-          'data-audience': hit.audience,
+          'data-audience': hit.visibility,
         }, hit.name, createElement('span', { className: 'dshtavern-preview-lore-meta' },
-          ` · ${POSITION_SHORT[hit.position]}${hit.audience === 'director' ? ' · 导演' : ''}`))))
+          ` · ${VISIBILITY_SHORT[hit.visibility]}`))))
 
   const previewBody = preview === null
     ? createElement('div', { className: 'dshtavern-wb-hint' },
