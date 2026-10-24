@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a standalone demo page with the captured screenshots inlined as base64."""
+"""Build the screenshot gallery page, with every capture inlined as base64."""
 import base64
 import json
 import pathlib
@@ -317,6 +317,6 @@ setInterval(playPipeline, 260 * steps.length + 2600);
 html = html.replace("__SHOTS__", json.dumps(cards, ensure_ascii=False))
 html = html.replace("__IMAGES__", json.dumps(images))
 
-out = ROOT / "index.html"
+out = ROOT / "index.screenshots.html"
 out.write_text(html, encoding="utf-8")
 print(f"wrote {out} — {out.stat().st_size / 1024:.0f} KB")
