@@ -106,7 +106,7 @@
     -webkit-user-select: none;
     user-select: none;
   }
-  .cover::after, .install::after { display: none; }
+  .cover::after, .install::after, .shot::after { display: none; }
   .slide.settled,
   .slide.settled .inner > * {
     transition: none;
@@ -696,6 +696,72 @@
   }
   .arrows button:disabled { opacity: .38; cursor: default; box-shadow: none; }
 
+  /* ---------- screenshot slides ---------- */
+  .slide.shot { align-items: stretch; }
+  .slide.shot .inner {
+    height: 100%;
+    align-items: center;
+    text-align: center;
+    gap: clamp(.625rem, 1.3vh, 1rem);
+  }
+  .slide.shot .eyebrow { justify-content: center; }
+  .shot-title {
+    font-size: clamp(1.0625rem, 1.7vw, 1.6875rem);
+    font-weight: 600;
+    letter-spacing: -.018em;
+    line-height: 1.4;
+    text-wrap: balance;
+    max-width: 32em;
+  }
+  .shot-cap {
+    font-size: clamp(.72rem, 1vw, .95rem);
+    color: var(--dim);
+    line-height: 1.7;
+    max-width: 48em;
+  }
+  .shot-cap b { color: var(--ink); font-weight: 600; }
+  .shot-frame {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+  .shot-frame img {
+    display: block;
+    max-height: 100%;
+    max-width: 100%;
+    height: auto;
+    width: auto;
+    border-radius: var(--radius);
+    background: #0b1020;
+    border: 1px solid #0b1220;
+    box-shadow: 0 2px 6px #0f172a1f, 0 34px 70px -34px #0f172a80;
+  }
+  .shot-pair {
+    flex: 0 1 auto;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(.75rem, 1.4vw, 1.25rem);
+    align-items: start;
+  }
+  .shot-pair figure {
+    margin: 0;
+    min-width: 0;
+  }
+  .shot-pair img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 1rem;
+    background: #0b1020;
+    border: 1px solid #0b1220;
+    box-shadow: 0 2px 6px #0f172a1f, 0 24px 54px -30px #0f172a80;
+  }
+
   /* ---------- responsive ---------- */
   @media (max-width: 1120px) {
     .cover .inner { grid-template-columns: minmax(0, 1fr); }
@@ -718,6 +784,12 @@
     .node { min-width: 5.75rem; padding: .625rem .875rem; }
     .step { grid-template-columns: 1.75rem minmax(0, 1fr); }
     .step code { grid-column: 1 / -1; }
+    .slide.shot .inner { height: auto; }
+    .shot-frame { flex: none; }
+    .shot-frame img { height: auto; width: 100%; }
+    .shot-pair { grid-template-columns: 1fr; }
+    .shot-pair figure { height: auto; }
+    .shot-pair img { height: auto; width: 100%; }
   }
   @media (max-width: 700px) {
     .arr { display: none; }
@@ -833,7 +905,33 @@
     </div>
   </section>
 
-  <section class="slide" data-index="3">
+  <section class="slide shot" data-index="3">
+    <div class="inner">
+      <div class="eyebrow">实际界面</div>
+      <div class="shot-title">一幕之内，三个人先后开口</div>
+      <figure class="shot-frame">
+        <img src="assets/01-conversation.jpg" alt="对话界面：同一幕里三位角色先后开口，旁白为缩进引用块，台词带角色名">
+      </figure>
+      <p class="shot-cap">
+        旁白是缩进的引用块，台词前面挂着角色名。<b>你发一句话，这一整段是连着的几次调用拼出来的。</b>
+      </p>
+    </div>
+  </section>
+
+  <section class="slide shot" data-index="4">
+    <div class="inner">
+      <div class="eyebrow">入口</div>
+      <div class="shot-title">一个悬浮球，七个面板</div>
+      <figure class="shot-frame">
+        <img src="assets/02-toolbox.jpg" alt="工具箱：提示词编排、Agent 编排、角色卡、世界书、用量统计、剧情回顾、玩家人设">
+      </figure>
+      <p class="shot-cap">
+        拖到顺手的位置，点开就是全部编辑入口。<b>和普通聊天界面共用一套代码</b>，不需要另开窗口。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide" data-index="5">
     <div class="inner">
       <div class="eyebrow">一轮对话</div>
       <h1 class="small">你说的一句话，会变成几次独立调用</h1>
@@ -867,7 +965,21 @@
     </div>
   </section>
 
-  <section class="slide" data-index="4">
+  <section class="slide shot" data-index="6">
+    <div class="inner">
+      <div class="eyebrow">同一个说法，在轨迹页</div>
+      <div class="shot-title">每一轮都被拆成这么多条独立记录</div>
+      <figure class="shot-frame">
+        <img src="assets/10-trajectory.jpg" alt="轨迹视图：第 9 轮到第 15 轮，每轮分别记录导演调用与各位角色调用">
+      </figure>
+      <p class="shot-cap">
+        每一行开头写着「导演 + 格里芬·奥尔德 / 塞拉菲娜·兰德 / 缇亚·维尔纳」——
+        <b>那是这一轮发出的全部请求</b>。前一行演出发生了什么，后面每一行是某个角色单独给出的回应。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide" data-index="7">
     <div class="inner">
       <div class="eyebrow">为什么不会串味</div>
       <h1 class="small">每张角色卡，都是一道墙</h1>
@@ -894,7 +1006,21 @@
     </div>
   </section>
 
-  <section class="slide" data-index="5">
+  <section class="slide shot" data-index="8">
+    <div class="inner">
+      <div class="eyebrow">角色卡</div>
+      <div class="shot-title">每张卡就是那一整套设定</div>
+      <figure class="shot-frame">
+        <img src="assets/03-characters.jpg" alt="角色卡编辑器：左侧是三张卡，右侧是名称、标签、描述、性格、场景、示例对话">
+      </figure>
+      <p class="shot-cap">
+        描述、性格、场景、自带提示词、示例对话，各占一栏。<b>发给角色 A 的请求里只会装进 A 的这一份</b>，
+        同一张卡还能挂只属于它的世界书条目。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide" data-index="9">
     <div class="inner">
       <div class="eyebrow">资料怎么分配</div>
       <h1 class="small">谁该知道什么，由你决定</h1>
@@ -921,7 +1047,21 @@
     </div>
   </section>
 
-  <section class="slide" data-index="6">
+  <section class="slide shot" data-index="10">
+    <div class="inner">
+      <div class="eyebrow">世界书</div>
+      <div class="shot-title">可见性就在条目里选，不用记顺序</div>
+      <figure class="shot-frame">
+        <img src="assets/04-worldbook.jpg" alt="世界书编辑器：可见性下拉选择指定角色可见，并勾选看得见的角色，下方是关键词与内容">
+      </figure>
+      <p class="shot-cap">
+        每条设定填两样东西：<b>什么词能触发它</b>，以及<b>谁看得见</b>。这条设为「指定角色可见」，
+        只勾了塞拉菲娜——导演照常读到，其他角色一个字都收不到。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide" data-index="11">
     <div class="inner">
       <div class="eyebrow">关于你</div>
       <h1 class="small">你不是「用户」，你是一个角色</h1>
@@ -939,7 +1079,20 @@
     </div>
   </section>
 
-  <section class="slide" data-index="7">
+  <section class="slide shot" data-index="12">
+    <div class="inner">
+      <div class="eyebrow">玩家人设</div>
+      <div class="shot-title">左边挑一份，右边是它的全部字段</div>
+      <figure class="shot-frame">
+        <img src="assets/05-persona.jpg" alt="玩家人设面板：左侧人设列表，右侧名称、标签、外观、性格、背景、说话方式">
+      </figure>
+      <p class="shot-cap">
+        人设属于工作区，每场新对话自动带上。<b>标着「当前生效中」的那一份</b>就是这一轮会写进提示词的。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide" data-index="13">
     <div class="inner">
       <div class="eyebrow">可调</div>
       <h1 class="small">模型读到的每一句，你都能改</h1>
@@ -956,7 +1109,35 @@
     </div>
   </section>
 
-  <section class="slide" data-index="8">
+  <section class="slide shot" data-index="14">
+    <div class="inner">
+      <div class="eyebrow">提示词编排</div>
+      <div class="shot-title">每一块都标着它从哪来</div>
+      <figure class="shot-frame">
+        <img src="assets/06-prompt.jpg" alt="提示词编排面板：角色提示词与导演台两个作用域，逐块显示来源、字数与启停开关">
+      </figure>
+      <p class="shot-cap">
+        模板块写着固定字数，角色卡块标「运行时」，世界书块写明「关键词命中、且当前角色可见」。
+        <b>右边那个开关关掉，这块就不进请求。</b>
+      </p>
+    </div>
+  </section>
+
+  <section class="slide shot" data-index="15">
+    <div class="inner">
+      <div class="eyebrow">装配预览</div>
+      <div class="shot-title">发出去之前，先看它到底收到了什么</div>
+      <figure class="shot-frame">
+        <img src="assets/07-preview.jpg" alt="装配预览：输入测试台词后显示命中的世界书条目与最终 system 文本">
+      </figure>
+      <p class="shot-cap">
+        输入一句台词，下面立刻列出<b>哪几条设定被触发</b>（还带可见性标签），
+        以及拼好的完整 system。它调用的是宿主真实的装配函数，不是另写一份模拟。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide" data-index="16">
     <div class="inner">
       <div class="eyebrow">看得见</div>
       <h1 class="small">它读到了什么，花了多少，聊过什么</h1>
@@ -978,7 +1159,35 @@
     </div>
   </section>
 
-  <section class="slide install" data-index="9">
+  <section class="slide shot" data-index="17">
+    <div class="inner">
+      <div class="eyebrow">用量统计</div>
+      <div class="shot-title">每一笔都记着账</div>
+      <figure class="shot-frame">
+        <img src="assets/08-usage.jpg" alt="用量统计：工作区与会话的 token 总量、输入输出拆分、上下文占用与缓存命中率">
+      </figure>
+      <p class="shot-cap">
+        一场十五轮的对话：<b>501.2K token、缓存命中 12.1%、上下文还占 3.33%</b>。
+        输入输出分开展示，能一眼看出钱花在了哪。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide shot" data-index="18">
+    <div class="inner">
+      <div class="eyebrow">剧情回顾</div>
+      <div class="shot-title">聊到几十轮，也不至于断片</div>
+      <figure class="shot-frame">
+        <img src="assets/09-tracker.jpg" alt="剧情回顾：第 15 轮的摘要，分世界、你、角色三段">
+      </figure>
+      <p class="shot-cap">
+        后台按计划把剧情重述成摘要，分<b>世界、你、每个角色</b>三段写。
+        每个角色单独记「已知」和「还不知道」，不会把秘密写串。
+      </p>
+    </div>
+  </section>
+
+  <section class="slide install" data-index="19">
     <div class="inner">
       <div class="eyebrow">安装</div>
       <h1 class="small">从 GitHub 下载，四步装进 DSH</h1>
