@@ -31,11 +31,15 @@ function run(line) {
 
 const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const { name, version } = manifest
+// An account with `auth-and-writes` two-factor asks for a one-time code on publish.
+// Passing it through the environment keeps the code out of shell history.
+const otp = process.env.NPM_OTP?.trim()
 
 console.log(`publishing ${name}@${version} to ${REGISTRY}`)
 run('pnpm build')
 run('pnpm test')
-run(`npm publish --registry ${REGISTRY} --access public${dryRun ? ' --dry-run' : ''}`)
+const otpFlag = otp === undefined || otp.length === 0 ? '' : ` --otp=${otp}`
+run(`npm publish --registry ${REGISTRY} --access public${otpFlag}${dryRun ? ' --dry-run' : ''}`)
 if (dryRun) {
   console.log('dry run: index left unchanged')
   process.exit(0)
