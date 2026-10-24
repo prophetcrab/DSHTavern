@@ -185,9 +185,9 @@ node scripts/publish.mjs --dry-run
 
 发布后要把 `market/index.json` 的 `source` 从 git 形式换回 `{ "type": "npm" }`，否则索引仍指向 git 提交。
 
-### 插件市场索引
+### 插件市场索引（Discover 里点装）
 
-DSH 没有官方市场，Discover 页读的是作者自己托管的 `index.json`。仓库里的 `market/` 就是可以直接静态托管的成品：
+DSH 没有官方市场，Discover 页读的是作者自己托管的 `index.json`。仓库里的 `market/` 就是成品，`.github/workflows/pages.yml` 会在 `market/` 有改动时自动发布到 GitHub Pages：
 
 ```text
 market/
@@ -195,19 +195,25 @@ market/
   icons/tavern.svg    # 相对 index.json 解析
 ```
 
-把 `market/` 部署到任意 https 静态主机（GitHub Pages、对象存储均可），然后在 DSH 里打开「插件 → 实验性插件 → 自定义插件索引」，把 `index.json` 的 URL 添加为索引源，之后就能在 Discover 里点装。
+**启用（只需一次）**：仓库 Settings → Pages → Source 选 **GitHub Actions**。之后每次推送 `market/` 的改动都会自动重新部署，索引地址是：
+
+```text
+https://prophetcrab.github.io/DSHTavern/index.json
+```
+
+**用户侧**：DSH 里打开「插件 → 实验性插件 → 自定义插件索引」，把这个地址添加为索引源，之后就能在 Discover 里看到插件并点装。
 
 索引格式有三条硬性要求，缺一条整个文件会被拒绝：`engines.dsh` 必须是合法的 semver range（本插件为 `>=0.2.1-rc.2 <0.3.0`）、`dsh.bundle` 必须存在、`versions[].publishTimestamp` 必须是源发布时间的 Unix 秒。前两条已在 `package.json` 里声明，第三条在 git 来源下取该提交的 committer 时间。格式可用官方校验器自测：
 
 ```sh
 node -e "
 const { parseMarketIndex } = require('<deepseek-harness>/packages/util/plugin-market-index/lib/index.js')
-parseMarketIndex(require('./market/index.json'), 'https://example.com/index.json')
+parseMarketIndex(require('./market/index.json'), 'https://prophetcrab.github.io/DSHTavern/index.json')
 console.log('valid')
 "
 ```
 
-当前索引用的是 git 来源，锁定了提交 `d5b52a1`。每次发布新版本，要同步更新 `versions` 里的 `commit` 与 `publishTimestamp`，否则用户装到的还是旧代码。
+索引锁定的是一个具体提交，不是分支——所以用户装到的代码不会在你不知情时改变。发新版本时更新 `versions` 里那一项的 `commit` 和 `publishTimestamp`（取新提交的 `git log -1 --format=%ct`）。
 
 ### 从源码开发（宿主 checkout）
 

@@ -52,11 +52,11 @@
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1792886400,
+          "publishTimestamp": 1792858702,
           "source": {
             "type": "git",
             "url": "https://github.com/prophetcrab/DSHTavern",
-            "commit": "d5b52a1090f3ef00b6d20d110d69e615988afa04"
+            "commit": "5030192cae6b1345ce86537b976811c41ac621d0"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
