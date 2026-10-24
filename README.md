@@ -93,7 +93,7 @@
 ```sh
 pnpm install
 pnpm build      # 宿主 tsc + 浏览器半 tsdown
-pnpm test       # 380 项，全离线
+pnpm test       # 410 项，全离线
 pnpm typecheck
 ```
 
@@ -106,27 +106,50 @@ node scripts/selftest-write.mjs --base http://127.0.0.1:3080
 
 ## 安装
 
-### 从 npm 安装（一条命令）
-
-发布之后不再需要 clone 和 build：
+### 一条命令（推荐，无需 npm 账号）
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add dshtavern
+npx @deepseek-ai/dsh plugin --profile web add github:prophetcrab/DSHTavern
 ```
 
-配合密钥与启动：
+仓库里提交了编译好的 `lib/`，所以这条命令不需要 clone、不需要构建、也不需要 npm 账号——pnpm 直接从 GitHub 拉取并安装。国内网络慢时，先给 git 配镜像：
+
+```sh
+git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"
+```
+
+配好密钥再启动：
 
 ```sh
 echo "DEEPSEEK_API_KEY=<你的密钥>" >> ~/.dsh/.env
 npx @deepseek-ai/dsh web
 ```
 
-### 从 GitHub 下载安装（未发布时的做法）
+侧栏出现「酒馆」入口即安装成功。
 
-不需要预先安装或克隆 DeepSeek Harness，`npx` 会拉起它：
+需要 Node ≥ 24.9 和 pnpm（`corepack enable pnpm` 即可获得）。密钥按「继承的环境变量 > 启动目录的 `.env` > `~/.dsh/.env`」的顺序读取，后者是用户级、不随仓库走，所以推荐写在那里。可选 `DEEPSEEK_BASE_URL` 同法配置。
+
+### 备选：tarball 地址
+
+不想让 pnpm 走 git 时，直接装打包好的文件：
 
 ```sh
-# 1. 下载并编译插件（仓库不含 lib/，必须本地编译）
+npx @deepseek-ai/dsh plugin --profile web add \
+  https://raw.githubusercontent.com/prophetcrab/DSHTavern/master/dist/dshtavern-0.1.0.tgz
+```
+
+同样不需要构建。改动插件后重新生成这两者：
+
+```sh
+node scripts/pack.mjs
+```
+
+它会构建、跑测试、刷新 `lib/`、写出 `dist/dshtavern-<version>.tgz` 并清掉旧版本。**改了源码要记得跑**——`lib/` 现在是提交进仓库的，忘了更新，别人装到的还是旧代码。
+
+### 从源码开发（宿主 checkout）
+
+```sh
+# 1. 下载并编译插件
 git clone https://github.com/prophetcrab/DSHTavern.git
 cd DSHTavern
 pnpm install && pnpm build
@@ -134,27 +157,15 @@ pnpm install && pnpm build
 # 2. 装进 web 配置（在插件目录里执行）
 npx @deepseek-ai/dsh plugin --profile web add .
 
-# 3. 配好密钥（写进用户级 .env，换目录启动也生效）
-echo "DEEPSEEK_API_KEY=<你的密钥>" >> ~/.dsh/.env
-
-# 4. 启动
+# 3. 启动
 npx @deepseek-ai/dsh web
 ```
 
-侧栏出现「酒馆」入口即安装成功。
+在插件目录之外执行第 2 步时，把 `.` 换成绝对路径，用正斜杠（`D:/project/DSHTavern`）。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
 
-需要 Node ≥ 24.9 和 pnpm（`corepack enable pnpm` 即可获得）。`pin` 到具体 DSH 版本的写法是 `npx @deepseek-ai/dsh@0.2.1-rc.2`，插件声明支持 `>=0.2.1-rc.2 <0.3.0`。
+### 发布到 npm（可选，需要 npm 账号）
 
-密钥按「继承的环境变量 > 启动目录的 `.env` > `~/.dsh/.env`」的顺序读取，后者是用户级、不随仓库走，所以推荐写在那里。可选 `DEEPSEEK_BASE_URL` 同法配置。
-
-两个容易踩的点：
-
-- **不能直接 `add github:prophetcrab/DSHTavern`**。仓库里不含 `lib/`（构建产物不入库），git 直装会装上一个没有产物的空壳，启动时报找不到 `lib/...`。必须先 clone 再 `pnpm build`，然后 `add` 这个本地目录。
-- 在插件目录之外执行第 2 步时，把 `.` 换成绝对路径，用正斜杠（`D:/project/DSHTavern`）。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
-
-### 发布到 npm
-
-发布一次，之后所有人都能一条命令安装。脚本会依次构建、跑测试、发布，并把 `market/index.json` 里的版本号与真实发布时间同步：
+上面两条路都不依赖 npm 注册表。如果想让用户用 `add dshtavern` 这种最短形式，再走这一步：脚本依次构建、跑测试、发布，并把 `market/index.json` 里的版本号与真实发布时间同步。
 
 ```sh
 npm login --registry https://registry.npmjs.org/
@@ -167,11 +178,12 @@ node scripts/publish.mjs
 node scripts/publish.mjs --dry-run
 ```
 
-注意三点：
+注意两点：
 
 - **本机 npm 默认指向 `registry.npmmirror.com`**，那是只读镜像，不能发布。脚本里把 `--registry https://registry.npmjs.org/` 写死了，绕开这个默认值；`npm login` 也要显式指定同一个源。
-- `lib/` 在 `.gitignore` 里但 npm 打包会读本地目录，所以 `package.json` 挂了 `prepublishOnly: pnpm build && pnpm test`，防止漏构建发出空包。
 - 包名 `dshtavern` 目前未被占用；一旦发布，版本号不可复用，再发必须升 `version`。
+
+发布后要把 `market/index.json` 的 `source` 从 git 形式换回 `{ "type": "npm" }`，否则索引仍指向 git 提交。
 
 ### 插件市场索引
 
@@ -185,7 +197,7 @@ market/
 
 把 `market/` 部署到任意 https 静态主机（GitHub Pages、对象存储均可），然后在 DSH 里打开「插件 → 实验性插件 → 自定义插件索引」，把 `index.json` 的 URL 添加为索引源，之后就能在 Discover 里点装。
 
-索引格式有三条硬性要求，缺一条整个文件会被拒绝：`engines.dsh` 必须是合法的 semver range（本插件为 `>=0.2.1-rc.2 <0.3.0`）、`dsh.bundle` 必须存在、`versions[].publishTimestamp` 必须是真实发布时间的 Unix 秒。前两条已在 `package.json` 里声明，第三条由 `scripts/publish.mjs` 自动写入。格式可用官方校验器自测：
+索引格式有三条硬性要求，缺一条整个文件会被拒绝：`engines.dsh` 必须是合法的 semver range（本插件为 `>=0.2.1-rc.2 <0.3.0`）、`dsh.bundle` 必须存在、`versions[].publishTimestamp` 必须是源发布时间的 Unix 秒。前两条已在 `package.json` 里声明，第三条在 git 来源下取该提交的 committer 时间。格式可用官方校验器自测：
 
 ```sh
 node -e "
@@ -194,6 +206,8 @@ parseMarketIndex(require('./market/index.json'), 'https://example.com/index.json
 console.log('valid')
 "
 ```
+
+当前索引用的是 git 来源，锁定了提交 `d5b52a1`。每次发布新版本，要同步更新 `versions` 里的 `commit` 与 `publishTimestamp`，否则用户装到的还是旧代码。
 
 ### 从源码开发（宿主 checkout）
 

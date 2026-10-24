@@ -54,7 +54,9 @@
           "version": "0.1.0",
           "publishTimestamp": 1792886400,
           "source": {
-            "type": "npm"
+            "type": "git",
+            "url": "https://github.com/prophetcrab/DSHTavern",
+            "commit": "d5b52a1090f3ef00b6d20d110d69e615988afa04"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
