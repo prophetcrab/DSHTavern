@@ -106,35 +106,59 @@ node scripts/selftest-write.mjs --base http://127.0.0.1:3080
 
 ## 安装
 
-完整流程，从零到一个能跑的酒馆：
+### 从 GitHub 下载安装（普通用户）
+
+不需要预先安装或克隆 DeepSeek Harness，`npx` 会拉起它：
 
 ```sh
-# 1. 确认环境：Node >= 24.9，pnpm 11.28
-node -v && pnpm -v
+# 1. 下载并编译插件（仓库不含 lib/，必须本地编译）
+git clone https://github.com/prophetcrab/DSHTavern.git
+cd DSHTavern
+pnpm install && pnpm build
 
-# 2. 构建宿主（只需一次）
+# 2. 装进 web 配置（在插件目录里执行）
+npx @deepseek-ai/dsh plugin --profile web add .
+
+# 3. 配好密钥（写进用户级 .env，换目录启动也生效）
+echo "DEEPSEEK_API_KEY=<你的密钥>" >> ~/.dsh/.env
+
+# 4. 启动
+npx @deepseek-ai/dsh web
+```
+
+侧栏出现「酒馆」入口即安装成功。
+
+需要 Node ≥ 24.9 和 pnpm（`corepack enable pnpm` 即可获得）。`pin` 到具体 DSH 版本的写法是 `npx @deepseek-ai/dsh@0.2.1-rc.2`，插件声明支持 `>=0.2.1-rc.2 <0.3.0`。
+
+密钥按「继承的环境变量 > 启动目录的 `.env` > `~/.dsh/.env`」的顺序读取，后者是用户级、不随仓库走，所以推荐写在那里。可选 `DEEPSEEK_BASE_URL` 同法配置。
+
+两个容易踩的点：
+
+- **不能直接 `add github:prophetcrab/DSHTavern`**。仓库里不含 `lib/`（构建产物不入库），git 直装会装上一个没有产物的空壳，启动时报找不到 `lib/...`。必须先 clone 再 `pnpm build`，然后 `add` 这个本地目录。
+- 在插件目录之外执行第 2 步时，把 `.` 换成绝对路径，用正斜杠（`D:/project/DSHTavern`）。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
+
+### 从源码开发（宿主 checkout）
+
+```sh
+# 1. 构建宿主（只需一次）
 cd <deepseek-harness checkout>
 pnpm install && pnpm build
 
-# 3. 构建插件（以链接方式装入，必须先编译出 lib/）
+# 2. 构建插件
 cd <本插件目录>
 pnpm install && pnpm build
 
-# 4. 装进 web 配置（回到宿主目录）
+# 3. 装进 web 配置（回到宿主目录）
 cd <deepseek-harness checkout>
 pnpm dsh plugin --profile web add <本插件目录>
 
-# 5. 启动
+# 4. 启动
 pnpm dsh web
 ```
 
-模型调用还需要在宿主的 `.env` 里配好 `DEEPSEEK_API_KEY`（可选 `DEEPSEEK_BASE_URL`）。
+第 3 步必须在宿主目录执行：`dsh` 由宿主仓库提供（`pnpm dsh`），不在 PATH 上。
 
-注意三点：
-
-- 第 4 步必须在宿主目录执行：`dsh` 由宿主仓库提供（`pnpm dsh`），不在 PATH 上。第 3 步的 `pnpm build` 不能省——插件以 `link:` 方式并入 profile，指向的是 `lib/`，跳过它启动会报找不到 `lib/preset/novel.js` 之类的错误。
-- `dsh plugin` 自建的 profile 以 `@deepseek-ai/dsh-base` 为底，不含 workspace registry。本插件的 `ctx.tavernWorkspaces` 依赖 web 层，所以自定义 profile 必须用 `--from-default-profile web` 创建。
-- 路径用正斜杠。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
+`dsh plugin` 自建的 profile 以 `@deepseek-ai/dsh-base` 为底，不含 workspace registry。本插件的 `ctx.tavernWorkspaces` 依赖 web 层，所以自定义 profile 必须用 `--from-default-profile web` 创建；`--profile web` 用的是官方预置模板，没有这个问题。
 
 ### 改了源码之后
 

@@ -580,6 +580,15 @@
   .step .what { display: flex; flex-direction: column; gap: .0625rem; }
   .step .what b { font-size: clamp(.8125rem, 1.2vw, 1.4rem); font-weight: 600; letter-spacing: -.01em; }
   .step .what span { font-size: clamp(.6875rem, .95vw, 1.1rem); color: var(--faint); line-height: 1.6; }
+  .step .what span code {
+    font-family: var(--mono);
+    font-size: .95em;
+    padding: .0625rem .25rem;
+    border: none;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border-radius: .25rem;
+  }
   .step code {
     font-family: var(--mono);
     font-size: clamp(.6875rem, 1vw, 1.16rem);
@@ -972,38 +981,33 @@
   <section class="slide install" data-index="9">
     <div class="inner">
       <div class="eyebrow">安装</div>
-      <h1 class="small">五步装好，然后开始你的第一场戏</h1>
+      <h1 class="small">从 GitHub 下载，四步装进 DSH</h1>
       <div class="steps">
         <div class="step">
           <div class="num">1</div>
-          <div class="what"><b>确认环境</b><span>需要 Node ≥ 24.9、pnpm 11.28</span></div>
-          <code>node -v &amp;&amp; pnpm -v</code>
+          <div class="what"><b>下载并编译</b><span>克隆到任意目录，编译出 lib/</span></div>
+          <code>git clone https://github.com/prophetcrab/DSHTavern.git<br>cd DSHTavern &amp;&amp; pnpm install &amp;&amp; pnpm build</code>
         </div>
         <div class="step">
           <div class="num">2</div>
-          <div class="what"><b>构建宿主</b><span>在 DSH 源码目录里跑一次</span></div>
-          <code>cd <em>&lt;deepseek-harness 目录&gt;</em> &amp;&amp; pnpm install &amp;&amp; pnpm build</code>
+          <div class="what"><b>装进 DSH</b><span>在刚克隆的目录里执行，不需要预装 DSH</span></div>
+          <code>npx @deepseek-ai/dsh plugin --profile web add .</code>
         </div>
         <div class="step">
           <div class="num">3</div>
-          <div class="what"><b>构建插件</b><span>插件以链接方式装入，必须先编译</span></div>
-          <code>cd <em>&lt;本插件目录&gt;</em> &amp;&amp; pnpm install &amp;&amp; pnpm build</code>
+          <div class="what"><b>配好密钥</b><span>写进 <code>~/.dsh/.env</code>，换目录启动也生效</span></div>
+          <code>echo "DEEPSEEK_API_KEY=<em>&lt;你的密钥&gt;</em>" &gt;&gt; ~/.dsh/.env</code>
         </div>
         <div class="step">
           <div class="num">4</div>
-          <div class="what"><b>装进 web 配置</b><span>回到宿主目录再执行</span></div>
-          <code>cd <em>&lt;deepseek-harness 目录&gt;</em> &amp;&amp; pnpm dsh plugin --profile web add <em>&lt;本插件目录&gt;</em></code>
-        </div>
-        <div class="step">
-          <div class="num">5</div>
-          <div class="what"><b>启动</b><span>侧栏出现「酒馆」入口即成功；已在运行就先停再启动</span></div>
-          <code>pnpm dsh web</code>
+          <div class="what"><b>启动</b><span>侧栏出现「酒馆」入口即成功</span></div>
+          <code>npx @deepseek-ai/dsh web</code>
         </div>
       </div>
       <p class="step-note">
-        路径一律用正斜杠（<code>D:/project/DSHTavern</code>）。Git Bash 会把反斜杠当转义符，写成
-        <code>D:\project\DSHTavern</code> 会解析成不存在的路径。模型调用还需要在宿主根的 <code>.env</code> 里配好
-        <code>DEEPSEEK_API_KEY</code>。
+        需要 Node ≥ 24.9 和 pnpm（<code>corepack enable pnpm</code> 即可获得）。插件必须先在本地编译——仓库里不含
+        <code>lib/</code>，直接 <code>add github:prophetcrab/DSHTavern</code> 会装上一个跑不起来的空壳。第 2 步的
+        <code>.</code> 指当前目录；在别处执行时换成绝对路径，用正斜杠（<code>D:/project/DSHTavern</code>）。
       </p>
     </div>
   </section>
