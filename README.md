@@ -106,15 +106,33 @@ node scripts/selftest-write.mjs --base http://127.0.0.1:3080
 
 ## 安装
 
-安装在当前运行的 `web` profile：
+完整流程，从零到一个能跑的酒馆：
 
 ```sh
+# 1. 确认环境：Node >= 24.9，pnpm 11.28
+node -v && pnpm -v
+
+# 2. 构建宿主（只需一次）
 cd <deepseek-harness checkout>
-pnpm dsh plugin --profile web add D:/project/DSHTavern
+pnpm install && pnpm build
+
+# 3. 构建插件（以链接方式装入，必须先编译出 lib/）
+cd <本插件目录>
+pnpm install && pnpm build
+
+# 4. 装进 web 配置（回到宿主目录）
+cd <deepseek-harness checkout>
+pnpm dsh plugin --profile web add <本插件目录>
+
+# 5. 启动
+pnpm dsh web
 ```
 
-注意两点：
+模型调用还需要在宿主的 `.env` 里配好 `DEEPSEEK_API_KEY`（可选 `DEEPSEEK_BASE_URL`）。
 
+注意三点：
+
+- 第 4 步必须在宿主目录执行：`dsh` 由宿主仓库提供（`pnpm dsh`），不在 PATH 上。第 3 步的 `pnpm build` 不能省——插件以 `link:` 方式并入 profile，指向的是 `lib/`，跳过它启动会报找不到 `lib/preset/novel.js` 之类的错误。
 - `dsh plugin` 自建的 profile 以 `@deepseek-ai/dsh-base` 为底，不含 workspace registry。本插件的 `ctx.tavernWorkspaces` 依赖 web 层，所以自定义 profile 必须用 `--from-default-profile web` 创建。
 - 路径用正斜杠。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
 
