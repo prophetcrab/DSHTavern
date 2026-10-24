@@ -59,6 +59,9 @@ import {
 } from './orchestrator.js'
 import type { PreviousTurn } from './orchestrator.js'
 import { fromCardEntries } from './worldbook.js'
+import { PersonaInvalidError, buildPersona, readPersonaFile, writePersonaFile } from './persona.js'
+import { resolvePersonaContext } from './persona-context.js'
+import type { Persona, PersonaFile, PersonaInput } from './persona.js'
 import { greetingStageLine, openingNarrationStageLine, selectOpening } from './greeting.js'
 import {
   buildOpeningSystem,
@@ -728,6 +731,7 @@ export class TavernWorkspaceService extends Service {
       scope === 'director' ? readWorld(workspace.path, options.sessionId) : Promise.resolve(undefined),
       readAgentConfig(workspace.path),
     ])
+    const persona = await resolvePersonaContext(workspace.path, layout)
     return buildPreview({
       scope,
       layout,
@@ -736,6 +740,7 @@ export class TavernWorkspaceService extends Service {
       worldbook: book.entries,
       ...(options.sample === undefined ? {} : { sample: options.sample }),
       ...(world === undefined ? {} : { world }),
+      ...persona,
       limits: config,
     })
   }
@@ -769,6 +774,56 @@ export class TavernWorkspaceService extends Service {
   async saveWorldbook(workspaceId: string, entries: unknown): Promise<WorldbookFile> {
     const workspace = await this.requireTavernWorkspace(workspaceId)
     return writeWorldbook(workspace.path, entries)
+  }
+
+  /**
+   * Read one tavern workspace's player personas.
+   * @param workspaceId - registered tavern workspace id.
+   * @returns the stored library.
+   */
+  async personas(workspaceId: string): Promise<PersonaFile> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    return readPersonaFile(workspace.path)
+  }
+
+  /**
+   * Replace one tavern workspace's persona library and active pointer.
+   *
+   * The caller sends the whole library so one save cannot interleave with
+   * another editor's changes; this is a workspace-level replace, not a
+   * per-field patch.
+   * @param workspaceId - registered tavern workspace id.
+   * @param input - full persona list and the active pointer.
+   * @returns the stored library.
+   */
+  async savePersonas(
+    workspaceId: string,
+    input: { personas?: unknown; activeId?: unknown },
+  ): Promise<PersonaFile> {
+    const workspace = await this.requireTavernWorkspace(workspaceId)
+    if (!Array.isArray(input.personas)) throw new PersonaInvalidError('人设列表必须是数组')
+    const previous = await readPersonaFile(workspace.path)
+    const now = new Date().toISOString()
+    const personas = input.personas.map((item) => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+        throw new PersonaInvalidError('人设条目必须是对象')
+      }
+      const record = item as Record<string, unknown>
+      const id = typeof record.id === 'string' && record.id.length > 0 ? record.id : undefined
+      const current = id === undefined ? undefined : previous.personas.find(persona => persona.id === id)
+      return buildPersona(record as PersonaInput, {
+        createdAt: current?.createdAt ?? now,
+        updatedAt: now,
+      }, id)
+    })
+    const wanted = typeof input.activeId === 'string' ? input.activeId : undefined
+    const activeId = wanted !== undefined && personas.some(persona => persona.id === wanted)
+      ? wanted
+      : personas[0]?.id
+    return writePersonaFile(workspace.path, {
+      personas,
+      ...(activeId === undefined ? {} : { activeId }),
+    })
   }
 
   /** List every character card stored in one tavern workspace. */
@@ -1040,6 +1095,7 @@ export class TavernWorkspaceService extends Service {
     const layout = await readPromptLayout(cwd)
     const directorLayout = await readPromptLayout(cwd, 'director')
     const workspaceBook = await readWorldbook(cwd)
+    const personaContext = await resolvePersonaContext(cwd, layout)
     // A player naming a character outranks the director's pick; the director is
     // a fallback that keeps the scene moving, not the final word on who answers.
     const addressed = config.honorPlayerMention ? mentionedSpeaker(playerInput, cast) : undefined
@@ -1245,6 +1301,7 @@ export class TavernWorkspaceService extends Service {
         worldbook: [...workspaceBook.entries, ...fromCardEntries(card.entries)],
         playerInput,
         narration: decision.narration,
+        ...personaContext,
         limits: config,
       })
       const characterMessage = buildCharacterMessage(
@@ -1626,6 +1683,11 @@ export class TavernWorkspaceService extends Service {
         path: '/tavern/worldbook',
         handler: (req, res) => this.handleWorldbook(req, res),
       }), 'dshtavern: /tavern/worldbook')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: '/tavern/personas',
+        handler: (req, res) => this.handlePersonas(req, res),
+      }), 'dshtavern: /tavern/personas')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
         path: '/tavern/characters/transfer',
@@ -2488,6 +2550,31 @@ export class TavernWorkspaceService extends Service {
     }
   }
 
+  /** Read or replace one tavern workspace's player personas. */
+  private async handlePersonas(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!allowLoopback(req, res)) return
+    try {
+      const method = req.method ?? 'GET'
+      if (method === 'GET') {
+        sendJson(res, 200, { ok: true, ...await this.personas(workspaceIdFromUrl(req)) })
+        return
+      }
+      if (method !== 'POST') {
+        res.setHeader('allow', 'GET, POST')
+        sendJson(res, 405, { ok: false, error: 'method not allowed; use GET or POST' })
+        return
+      }
+      const body = await readJsonObject(req)
+      const workspaceId = optionalString(body, 'workspaceId') ?? workspaceIdFromUrl(req)
+      sendJson(res, 200, {
+        ok: true,
+        ...await this.savePersonas(workspaceId, { personas: body.personas, activeId: body.activeId }),
+      })
+    } catch (error) {
+      this.fail(res, error)
+    }
+  }
+
   /** Assemble one scope's prompt for inspection. */
   private async handlePreview(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!allowLoopback(req, res)) return
@@ -2583,6 +2670,7 @@ export class TavernWorkspaceService extends Service {
       || error instanceof PromptLayoutVersionError
       || error instanceof CharacterCardInvalidError
       || error instanceof WorldbookInvalidError
+      || error instanceof PersonaInvalidError
       || error instanceof AgentConfigInvalidError
       ? 400
       : error instanceof TavernWorkspaceNotFoundError ? 404 : 500

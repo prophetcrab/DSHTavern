@@ -18,61 +18,40 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { STATE_DIRECTORY, type StageEntry } from './stage.js'
+import type { StageEntry } from './stage.js'
+import { STATE_DIRECTORY } from './stage.js'
+import { WORLDBOOK_DEFAULT_DEPTH, WORLDBOOK_SCAN_LINES } from './worldbook-match.js'
+import type {
+  WorldbookEntry,
+  WorldbookLogic,
+  WorldbookVisibility,
+} from './worldbook-match.js'
+
+// The matching rules live in their own module so the browser half can preview
+// activation with the same code the host uses to assemble a request.
+export {
+  WORLDBOOK_ACTIVE_CHARS_MAX,
+  WORLDBOOK_ACTIVE_MAX,
+  WORLDBOOK_DEFAULT_DEPTH,
+  WORLDBOOK_SCAN_LINES,
+  activateEntries,
+  renderLore,
+  wholeWordIndex,
+} from './worldbook-match.js'
+export type {
+  ActivationOptions,
+  LoreReader,
+  WholeWordOptions,
+  WorldbookEntry,
+  WorldbookLogic,
+  WorldbookVisibility,
+} from './worldbook-match.js'
 
 /** Worldbook file name inside the tavern state directory. */
 export const WORLDBOOK_FILE = 'worldbook.json'
 
 /** Schema version this build reads and writes. */
 export const WORLDBOOK_SCHEMA = 1
-
-/** How secondary keys combine with a primary hit. */
-export type WorldbookLogic = 'and_any' | 'and_all' | 'not_any' | 'not_all'
-
-/**
- * Where an activated entry is placed.
- *
- * `before` and `after` fill the two catalogue blocks around the character
- * definition. `tail` appends after everything else, which is where
- * scene-specific reminders belong: the model weights the end of a prompt more
- * heavily than the middle.
- */
-export type WorldbookPosition = 'before' | 'after' | 'tail'
-
-/** Who may read an entry. `director` entries never reach a character prompt. */
-export type WorldbookAudience = 'all' | 'director'
-
-/** One keyed lore entry. */
-export interface WorldbookEntry {
-  /** Stable identity used by the editor and the stage records. */
-  readonly id: string
-  /** Display name; also the heading this entry contributes. */
-  readonly name: string
-  /** Text injected when the entry activates. */
-  readonly content: string
-  /** Primary triggers; any one hit activates the entry. */
-  readonly keys: readonly string[]
-  /** Refining triggers consulted through {@link logic}. */
-  readonly secondaryKeys: readonly string[]
-  /** How secondary keys combine. */
-  readonly logic: WorldbookLogic
-  /** Always inject, ignoring keys. */
-  readonly constant: boolean
-  /** Where the activated text lands. */
-  readonly position: WorldbookPosition
-  /** Lower values appear earlier in the prompt and survive the budget first. */
-  readonly order: number
-  /** How many recent stage lines the scan covers; `0` means the whole window. */
-  readonly depth: number
-  /** Whether this entry participates at all. */
-  readonly enabled: boolean
-  /** Match case-sensitively. */
-  readonly caseSensitive: boolean
-  /** Require the key to sit on word boundaries. */
-  readonly wholeWords: boolean
-  /** Who may read the entry. */
-  readonly audience: WorldbookAudience
-}
 
 /** Persisted worldbook file. */
 export interface WorldbookFile {
@@ -87,19 +66,6 @@ export const WORLDBOOK_CONTENT_MAX = 64_000
 
 /** Largest number of entries a workspace may store. */
 export const WORLDBOOK_ENTRIES_MAX = 512
-
-/** Most entries one request may carry. */
-export const WORLDBOOK_ACTIVE_MAX = 8
-
-/** Most characters of lore one request may carry. */
-export const WORLDBOOK_ACTIVE_CHARS_MAX = 6000
-
-/** Default scan window when an entry names no depth. */
-export const WORLDBOOK_DEFAULT_DEPTH = 6
-
-/** Recent stage lines the lore scan covers by default. */
-export const WORLDBOOK_SCAN_LINES = 20
-
 /** A worldbook file or entry is structurally invalid. */
 export class WorldbookInvalidError extends Error {
   constructor(message: string, readonly path?: string) {
@@ -143,13 +109,12 @@ export function buildEntry(input: unknown, path?: string): WorldbookEntry {
     secondaryKeys: keyList(record.secondaryKeys, path),
     logic: logicOf(record.logic),
     constant: record.constant === true,
-    position: positionOf(record.position),
     order: numberOr(record.order, 100),
     depth: numberOr(record.depth, WORLDBOOK_DEFAULT_DEPTH),
     enabled: record.enabled !== false,
     caseSensitive: record.caseSensitive === true,
     wholeWords: record.wholeWords === true,
-    audience: record.audience === 'director' ? 'director' : 'all',
+    ...visibilityOf(record),
   }
 }
 
@@ -303,196 +268,6 @@ export async function writeWorldbook(workspaceDir: string, entries: unknown): Pr
   return book
 }
 
-/** Activated entry grouped by where it lands. */
-export interface ActivatedLore {
-  readonly before: readonly WorldbookEntry[]
-  readonly after: readonly WorldbookEntry[]
-  readonly tail: readonly WorldbookEntry[]
-}
-
-/** Options for {@link activateEntries}. */
-export interface ActivationOptions {
-  /** Entries from the workspace and the active character card. */
-  readonly entries: readonly WorldbookEntry[]
-  /** Recent observable text the scan runs over, newest last. */
-  readonly scanText: string
-  /** Most recent stage lines; each entry's `depth` indexes into this. */
-  readonly recentLines: readonly string[]
-  /** Reader asking for lore; `director` entries are dropped for characters. */
-  readonly audience: 'character' | 'director'
-  /** Maximum entries returned. */
-  readonly maxEntries?: number
-  /** Maximum characters of content returned. */
-  readonly maxChars?: number
-}
-
-/**
- * Select the entries one reader should receive.
- *
- * Constant entries bypass matching. Keyed entries scan the last `depth` lines
- * (their own depth, else the whole provided window). Secondary keys then narrow
- * the hit through {@link WorldbookLogic}. The result is ordered by `order` and
- * cut to the budget, so a long worldbook degrades predictably instead of
- * silently consuming the request.
- * @param options - entries, scan text, reader, and budget.
- * @returns activated entries grouped by position.
- */
-export function activateEntries(options: ActivationOptions): ActivatedLore {
-  const maxEntries = options.maxEntries ?? WORLDBOOK_ACTIVE_MAX
-  const maxChars = options.maxChars ?? WORLDBOOK_ACTIVE_CHARS_MAX
-  const eligible = options.entries
-    .filter(entry => entry.enabled && entry.content.trim().length > 0)
-    .filter(entry => options.audience === 'director' || entry.audience === 'all')
-    .filter(entry => entry.constant || matches(entry, options))
-    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-
-  const before: WorldbookEntry[] = []
-  const after: WorldbookEntry[] = []
-  const tail: WorldbookEntry[] = []
-  let usedChars = 0
-  let usedEntries = 0
-  for (const entry of eligible) {
-    if (usedEntries >= maxEntries) break
-    const cost = entry.content.length
-    if (usedChars + cost > maxChars) continue
-    usedChars += cost
-    usedEntries += 1
-    if (entry.position === 'before') before.push(entry)
-    else if (entry.position === 'after') after.push(entry)
-    else tail.push(entry)
-  }
-  return { before, after, tail }
-}
-
-/**
- * Render activated entries as prompt text.
- * @param entries - activated entries for one position.
- * @returns their contents joined in order; empty when none activated.
- */
-export function renderLore(entries: readonly WorldbookEntry[]): string {
-  return entries.map(entry => entry.content.trim()).filter(text => text.length > 0).join('\n\n')
-}
-
-/**
- * Convert a character card's own entries into worldbook entries.
- *
- * Card entries are private to that character, so they carry `audience: 'all'`
- * only for that card — they are never merged into another character's list.
- * @param entries - card-owned entries.
- * @returns equivalent worldbook entries.
- */
-export function fromCardEntries(entries: readonly {
-  readonly id: string
-  readonly name: string
-  readonly content: string
-  readonly keys: readonly string[]
-  readonly position: 'before' | 'after'
-  readonly constant: boolean
-  readonly enabled: boolean
-}[]): WorldbookEntry[] {
-  return entries.map(entry => ({
-    id: entry.id,
-    name: entry.name,
-    content: entry.content,
-    keys: entry.keys,
-    secondaryKeys: [],
-    logic: 'and_any' as const,
-    constant: entry.constant,
-    position: entry.position,
-    order: 100,
-    depth: WORLDBOOK_DEFAULT_DEPTH,
-    enabled: entry.enabled,
-    caseSensitive: false,
-    wholeWords: false,
-    audience: 'all' as const,
-  }))
-}
-
-/** Whether one entry's triggers hit the scanned text. */
-function matches(entry: WorldbookEntry, options: ActivationOptions): boolean {
-  if (entry.keys.length === 0) return false
-  const window = entry.depth > 0 ? options.recentLines.slice(-entry.depth) : options.recentLines
-  const haystack = [window.join('\n'), options.scanText].join('\n')
-  if (!hitsAny(entry.keys, haystack, entry)) return false
-  if (entry.secondaryKeys.length === 0) return true
-  return applyLogic(entry, haystack)
-}
-
-/** Apply the secondary-key logic to a primary hit. */
-function applyLogic(entry: WorldbookEntry, haystack: string): boolean {
-  const results = entry.secondaryKeys.map(key => keyHits(key, haystack, entry))
-  switch (entry.logic) {
-    case 'and_all': return results.every(Boolean)
-    case 'not_any': return !results.some(Boolean)
-    case 'not_all': return !results.every(Boolean)
-    case 'and_any':
-    default: return results.some(Boolean)
-  }
-}
-
-function hitsAny(keys: readonly string[], haystack: string, entry: WorldbookEntry): boolean {
-  return keys.some(key => keyHits(key, haystack, entry))
-}
-
-/** Whether one key occurs in the haystack under the entry's matching rules. */
-function keyHits(key: string, haystack: string, entry: WorldbookEntry): boolean {
-  if (!entry.wholeWords) {
-    const needle = entry.caseSensitive ? key : key.toLowerCase()
-    const subject = entry.caseSensitive ? haystack : haystack.toLowerCase()
-    return subject.includes(needle)
-  }
-  return wholeWordIndex(haystack, key, { caseSensitive: entry.caseSensitive, cjkWords: true }) !== -1
-}
-
-/** Options for {@link wholeWordIndex}. */
-export interface WholeWordOptions {
-  /** Whether the comparison keeps case. */
-  readonly caseSensitive: boolean
-  /**
-   * Whether CJK characters count as word characters.
-   *
-   * Worldbook keys are explicit author choices, so an entry asking for whole
-   * words means "伞 must not fire inside 雨伞架". Mention detection runs over
-   * running prose where a name directly abuts a verb, so it leaves this off.
-   */
-  readonly cjkWords: boolean
-}
-
-/**
- * First occurrence of `needle` that has no word-character neighbour.
- *
- * Word characters are ASCII letters and digits, plus CJK ideographs, kana, and
- * hangul when {@link WholeWordOptions.cjkWords} is set. This is an
- * approximation: it does not know the language's segmentation, only that two
- * letters written together belong to one word.
- * @param subject - text to search.
- * @param needle - text to find.
- * @param options - case folding and whether CJK binds.
- * @returns the first boundary-respecting index, or -1 when none matches.
- */
-export function wholeWordIndex(subject: string, needle: string, options: WholeWordOptions): number {
-  if (needle.length === 0) return -1
-  const wanted = options.caseSensitive ? needle : needle.toLowerCase()
-  const haystack = options.caseSensitive ? subject : subject.toLowerCase()
-  let from = 0
-  while (from <= haystack.length) {
-    const index = haystack.indexOf(wanted, from)
-    if (index === -1) return -1
-    const before = haystack[index - 1]
-    const after = haystack[index + wanted.length]
-    if (!isWordChar(before, options.cjkWords) && !isWordChar(after, options.cjkWords)) return index
-    from = index + 1
-  }
-  return -1
-}
-
-/** Whether one character binds to its neighbour inside a word. */
-function isWordChar(char: string | undefined, cjkWords: boolean): boolean {
-  if (char === undefined) return false
-  if (/[A-Za-z0-9]/.test(char)) return true
-  return cjkWords && /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(char)
-}
-
 function text(value: unknown, field: string, path?: string): string {
   if (value === undefined || value === null) return ''
   if (typeof value !== 'string') throw new WorldbookInvalidError(`${field} 必须是字符串`, path)
@@ -513,8 +288,24 @@ function logicOf(value: unknown): WorldbookLogic {
   return value === 'and_all' || value === 'not_any' || value === 'not_all' ? value : 'and_any'
 }
 
-function positionOf(value: unknown): WorldbookPosition {
-  return value === 'after' || value === 'tail' ? value : 'before'
+/**
+ * Read an entry's audience.
+ *
+ * The current shape is `visibility` plus `characterIds`. Files written before
+ * that split carry `audience: 'all' | 'director'` and a now-meaningless
+ * `position`; the legacy audience maps directly onto the new visibility and the
+ * position is dropped, so an existing workspace keeps working without a rewrite.
+ */
+function visibilityOf(record: Record<string, unknown>): {
+  visibility: WorldbookVisibility
+  characterIds: readonly string[]
+} {
+  const raw = record.visibility ?? record.audience
+  if (raw === 'director') return { visibility: 'director', characterIds: [] }
+  if (raw === 'characters') {
+    return { visibility: 'characters', characterIds: keyList(record.characterIds) }
+  }
+  return { visibility: 'all', characterIds: [] }
 }
 
 function numberOr(value: unknown, fallback: number): number {
@@ -528,6 +319,47 @@ function isMissing(error: unknown): boolean {
 }
 
 /** Stage lines as scan text, newest last. */
+/**
+ * Convert a character card's own entries into worldbook entries.
+ *
+ * Card entries are private to that character, so they are only ever merged into
+ * that card's own assembly; they are never offered to another character.
+ * @param entries - card-owned entries.
+ * @returns equivalent worldbook entries.
+ */
+export function fromCardEntries(entries: readonly {
+  readonly id: string
+  readonly name: string
+  readonly content: string
+  readonly keys: readonly string[]
+  readonly position: 'before' | 'after'
+  readonly constant: boolean
+  readonly enabled: boolean
+}[]): WorldbookEntry[] {
+  return entries.map(entry => ({
+    id: entry.id,
+    name: entry.name,
+    content: entry.content,
+    keys: entry.keys,
+    secondaryKeys: [],
+    logic: 'and_any' as const,
+    constant: entry.constant,
+    order: 100,
+    depth: WORLDBOOK_DEFAULT_DEPTH,
+    enabled: entry.enabled,
+    caseSensitive: false,
+    wholeWords: false,
+    visibility: 'all' as const,
+    characterIds: [],
+  }))
+}
+
+/**
+ * Stage lines as scan text, newest last.
+ * @param stage - staged lines.
+ * @param limit - how many trailing lines to include.
+ * @returns one line per entry, speech attributed to its speaker.
+ */
 export function stageScanLines(stage: readonly StageEntry[], limit = WORLDBOOK_SCAN_LINES): string[] {
   return stage.slice(-limit).map(entry => entry.kind === 'narration'
     ? entry.text

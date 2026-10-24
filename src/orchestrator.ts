@@ -275,11 +275,11 @@ function directorScaffold(input: DirectorPromptInput): {
     entries: input.worldbook ?? [],
     scanText: input.playerInput ?? '',
     recentLines: stageScanLines(input.stage, limits.loreScanLines),
-    audience: 'director',
+    reader: { kind: 'director' },
     maxEntries: limits.loreMaxEntries,
     maxChars: limits.loreMaxChars,
   })
-  const loreText = renderLore([...lore.before, ...lore.after, ...lore.tail])
+  const loreText = renderLore(lore)
   const state = new Map<string, string>([
     ['director-roster', roster],
     ['director-world', renderWorld(input.world)],
@@ -514,6 +514,10 @@ export function buildCharacterSystem(input: {
   /** Narration this beat already staged, so its keywords count too. */
   readonly narration?: string
   /** Runtime knobs; omitted fields use the shipped constants. */
+  /** Workspace preset persona text; used when the layout names no persona. */
+  readonly persona?: string
+  /** Rendered text per persona id, so a block can name the persona it wants. */
+  readonly personaById?: Readonly<Record<string, string>>
   readonly limits?: BeatLimits
 }): string {
   const limits = limitsOf(input.limits)
@@ -522,15 +526,20 @@ export function buildCharacterSystem(input: {
     entries: input.worldbook ?? [],
     scanText: [input.narration ?? '', input.playerInput ?? ''].join('\n'),
     recentLines: stageScanLines(input.stage, limits.loreScanLines),
-    audience: 'character',
+    reader: { kind: 'character', characterId: input.card.id },
     maxEntries: limits.loreMaxEntries,
     maxChars: limits.loreMaxChars,
   })
   const views = promptBlockViews(input.layout).map((view) => {
-    if (view.id === 'worldbook-before') return { ...view, content: renderLore(lore.before) }
-    if (view.id === 'worldbook-after') return { ...view, content: renderLore(lore.after) }
-    if (view.id === 'lore-tail') return { ...view, content: renderLore(lore.tail) }
+    if (view.id === 'worldbook') return { ...view, content: renderLore(lore) }
     if (view.id === 'character-stage') return { ...view, content: contextText || '（剧情尚未开始）' }
+    // The block renders the persona the layout names; naming none follows the
+    // workspace preset. A blank result leaves the catalogue default in place.
+    if (view.id === 'user-persona') {
+      const picked = view.personaId === undefined ? undefined : input.personaById?.[view.personaId]
+      const text = picked ?? input.persona
+      return text !== undefined && text.trim().length > 0 ? { ...view, content: text } : view
+    }
     const injected = cardContent(view.id, input.card)
     return injected === undefined ? view : { ...view, content: injected }
   })

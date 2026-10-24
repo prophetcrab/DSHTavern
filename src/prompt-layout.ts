@@ -71,6 +71,8 @@ export interface PromptBlockDefinition {
   readonly description: string
   /** Whether the user can edit this block's text in the orchestrator. */
   readonly editable: boolean
+  /** Whether the block renders a chosen persona instead of its own text. */
+  readonly selectsPersona?: boolean
   /** Text used when the layout carries no override. */
   readonly defaultContent: string
 }
@@ -81,6 +83,14 @@ export interface PromptBlockState {
   readonly enabled: boolean
   /** Edited text; omitted while the block still uses {@link PromptBlockDefinition.defaultContent}. */
   readonly content?: string
+  /**
+   * Persona this block renders instead of its text.
+   *
+   * Set on `user-persona` when the author picks one of the workspace personas
+   * rather than following the workspace's preset; absent means "follow the
+   * preset".
+   */
+  readonly personaId?: string
 }
 
 /** One workspace's persisted prompt layout. */
@@ -99,6 +109,8 @@ export interface PromptBlockView extends PromptBlockDefinition {
   readonly content: string
   /** Whether the stored layout overrides the default text. */
   readonly overridden: boolean
+  /** Persona this block renders, when the layout names one. */
+  readonly personaId?: string
 }
 
 /** A layout file used a newer schema than this build understands. */
@@ -172,20 +184,11 @@ export const PROMPT_BLOCKS: readonly PromptBlockDefinition[] = [
     defaultContent: '',
   },
   {
-    id: 'worldbook-before',
+    id: 'worldbook',
     appliesTo: 'character',
-    label: '世界书（角色定义前）',
+    label: '世界书',
     source: 'worldbook',
-    description: '关键词命中的设定，插在角色定义之前',
-    editable: false,
-    defaultContent: '',
-  },
-  {
-    id: 'worldbook-after',
-    appliesTo: 'character',
-    label: '世界书（角色定义后）',
-    source: 'worldbook',
-    description: '关键词命中的设定，插在角色定义之后',
+    description: '关键词命中、且当前角色可见的设定（运行时填入）',
     editable: false,
     defaultContent: '',
   },
@@ -201,10 +204,11 @@ export const PROMPT_BLOCKS: readonly PromptBlockDefinition[] = [
   {
     id: 'user-persona',
     appliesTo: 'character',
-    label: '用户人设',
+    label: '玩家人设',
     source: 'persona',
-    description: '玩家身份与称呼',
-    editable: true,
+    description: '从玩家人设库中选择一个；未选择时使用预设人设',
+    editable: false,
+    selectsPersona: true,
     defaultContent: '{{user}} 是一个普通旅人。',
   },
   {
@@ -224,15 +228,6 @@ export const PROMPT_BLOCKS: readonly PromptBlockDefinition[] = [
     description: 'post_history_instructions',
     editable: true,
     defaultContent: '保持 {{char}} 的角色设定与说话风格；不要跳出角色，不要总结或解释。',
-  },
-  {
-    id: 'lore-tail',
-    appliesTo: 'character',
-    label: '世界书（尾部）',
-    source: 'worldbook',
-    description: '关键词命中且插入位置为「末尾」的设定；默认排在角色定义之后、舞台记录之前',
-    editable: false,
-    defaultContent: '',
   },
   {
     id: 'character-stage',
@@ -426,6 +421,7 @@ export function promptBlockViews(layout: PromptLayout, scope: PromptScope = 'cha
       enabled: block.enabled,
       content: block.content ?? definition.defaultContent,
       overridden: block.content !== undefined,
+      ...(block.personaId === undefined ? {} : { personaId: block.personaId }),
     })
   }
   return views
@@ -499,6 +495,19 @@ export function mergeCatalogueBlocks(
  * @returns normalised blocks in the given order.
  * @throws PromptLayoutInvalidError when the list misses, repeats, or invents blocks.
  */
+/**
+ * Block ids the previous catalogue used.
+ *
+ * Layout files written before the worldbook blocks were merged still name these;
+ * they collapse onto the single `worldbook` block so a saved layout keeps its
+ * ordering and enablement instead of failing to load.
+ */
+const LEGACY_BLOCK_ALIASES: Readonly<Record<string, string>> = {
+  'worldbook-before': 'worldbook',
+  'worldbook-after': 'worldbook',
+  'lore-tail': 'worldbook',
+}
+
 export function normalizePromptBlocks(value: unknown, scope: PromptScope = 'character'): PromptBlockState[] {
   if (!Array.isArray(value)) {
     throw new PromptLayoutInvalidError('prompt blocks must be an array')
@@ -506,18 +515,27 @@ export function normalizePromptBlocks(value: unknown, scope: PromptScope = 'char
   const catalogue = blockIdsFor(scope)
   const known = new Set(catalogue)
   const seen = new Set<string>()
+  // Legacy blocks that collapse into one keep the block enabled when any of them
+  // was enabled, so merging never silently disables a section.
+  const mergedEnabled = new Set<string>()
   const blocks: PromptBlockState[] = []
   for (const entry of value) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       throw new PromptLayoutInvalidError('every prompt block must be an object')
     }
     const record = entry as Record<string, unknown>
-    const id = record.id
-    if (typeof id !== 'string' || id.length === 0) {
+    const declared = record.id
+    if (typeof declared !== 'string' || declared.length === 0) {
       throw new PromptLayoutInvalidError('every prompt block needs a string id')
     }
-    if (!known.has(id)) throw new PromptLayoutInvalidError(`unknown prompt block '${id}'`)
-    if (seen.has(id)) throw new PromptLayoutInvalidError(`duplicate prompt block '${id}'`)
+    const id = LEGACY_BLOCK_ALIASES[declared] ?? declared
+    if (!known.has(id)) throw new PromptLayoutInvalidError(`unknown prompt block '${declared}'`)
+    if (seen.has(id)) {
+      // Several legacy worldbook blocks collapse onto one; keep it enabled when
+      // any of them was enabled.
+      if (record.enabled === true) mergedEnabled.add(id)
+      continue
+    }
     seen.add(id)
     const enabled = record.enabled
     if (typeof enabled !== 'boolean') {
@@ -530,13 +548,27 @@ export function normalizePromptBlocks(value: unknown, scope: PromptScope = 'char
     if (typeof content === 'string' && Buffer.byteLength(content, 'utf8') > PROMPT_BLOCK_CONTENT_MAX_BYTES) {
       throw new PromptLayoutInvalidError(`prompt block '${id}' content is too large`)
     }
-    blocks.push({ id, enabled, ...(content === undefined ? {} : { content }) })
+    const personaId = record.personaId
+    if (personaId !== undefined && typeof personaId !== 'string') {
+      throw new PromptLayoutInvalidError(`prompt block '${id}' personaId must be a string`)
+    }
+    blocks.push({
+      id,
+      enabled,
+      ...(content === undefined ? {} : { content }),
+      ...(typeof personaId === 'string' && personaId.length > 0 ? { personaId } : {}),
+    })
   }
+  // Merging must never silently disable a section: a collapsed legacy block
+  // that was enabled keeps the surviving block enabled.
+  const resolved = blocks.map(block => mergedEnabled.has(block.id) && !block.enabled
+    ? { ...block, enabled: true }
+    : block)
   const missing = catalogue.filter(id => !seen.has(id))
   if (missing.length > 0) {
     throw new PromptLayoutInvalidError(`prompt layout is missing blocks: ${missing.join(', ')}`)
   }
-  return blocks
+  return resolved
 }
 
 /**
@@ -717,10 +749,11 @@ export async function writePromptLayout(
   // catalogue default, so toggling or reordering never bakes defaults in.
   const stored: PromptBlockState[] = normalized.map(block => {
     const definition = catalogue.find(item => item.id === block.id)
+    const personaId = block.personaId === undefined ? {} : { personaId: block.personaId }
     if (block.content === undefined || definition === undefined || block.content === definition.defaultContent) {
-      return { id: block.id, enabled: block.enabled }
+      return { id: block.id, enabled: block.enabled, ...personaId }
     }
-    return { id: block.id, enabled: block.enabled, content: block.content }
+    return { id: block.id, enabled: block.enabled, content: block.content, ...personaId }
   })
   const directory = join(workspaceDir, PROMPT_DIRECTORY)
   await mkdir(directory, { recursive: true })

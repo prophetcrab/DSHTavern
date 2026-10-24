@@ -1,15 +1,16 @@
 import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import { downloadDocument, pickTextFile } from './characters.js'
+import { activateEntries } from '../worldbook-match.js'
+import type { WorldbookEntry } from '../worldbook-match.js'
 
 /** How secondary keys combine with a primary hit. */
 export type WorldbookLogic = 'and_any' | 'and_all' | 'not_any' | 'not_all'
 
 /** Where an activated entry is placed. */
-export type WorldbookPosition = 'before' | 'after' | 'tail'
+export type WorldbookVisibility = 'all' | 'director' | 'characters'
 
 /** Who may read an entry. */
-export type WorldbookAudience = 'all' | 'director'
 
 /** One keyed lore entry as served by `/tavern/worldbook`. */
 export interface WorldbookEntryView {
@@ -20,13 +21,14 @@ export interface WorldbookEntryView {
   readonly secondaryKeys: readonly string[]
   readonly logic: WorldbookLogic
   readonly constant: boolean
-  readonly position: WorldbookPosition
+  readonly visibility: WorldbookVisibility
+  /** Character ids when visibility is `characters`. */
+  readonly characterIds: readonly string[]
   readonly order: number
   readonly depth: number
   readonly enabled: boolean
   readonly caseSensitive: boolean
   readonly wholeWords: boolean
-  readonly audience: WorldbookAudience
 }
 
 interface WorkbenchState {
@@ -54,10 +56,11 @@ const LOGIC_LABELS: Record<WorldbookLogic, string> = {
   not_all: '次要词不全部出现',
 }
 
-const POSITION_LABELS: Record<WorldbookPosition, string> = {
-  before: '角色定义前',
-  after: '角色定义后',
-  tail: '提示词末尾',
+/** Human-facing label for one visibility. */
+const VISIBILITY_LABELS: Record<WorldbookVisibility, string> = {
+  all: '所有角色可见',
+  director: '仅导演可见',
+  characters: '指定角色可见',
 }
 
 /** A blank entry for the "new" action. */
@@ -70,13 +73,13 @@ function blankEntry(): WorldbookEntryView {
     secondaryKeys: [],
     logic: 'and_any',
     constant: false,
-    position: 'before',
+    visibility: 'all',
+    characterIds: [],
     order: 100,
     depth: 6,
     enabled: true,
     caseSensitive: false,
     wholeWords: false,
-    audience: 'all',
   }
 }
 
@@ -99,6 +102,23 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
     throw new Error(typeof record.error === 'string' ? record.error : `请求失败（HTTP ${response.status}）`)
   }
   return record
+}
+
+/**
+ * Load the character cards a visibility picker can offer.
+ * @param workspaceId - tavern workspace id.
+ * @returns card ids and names; empty when the workspace has none.
+ */
+async function loadCharacters(workspaceId: string): Promise<{ id: string; name: string }[]> {
+  const response = await fetch(`/tavern/characters?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    headers: { accept: 'application/json' },
+    cache: 'no-store',
+  })
+  const body = await readJson(response)
+  if (!Array.isArray(body.cards)) return []
+  return (body.cards as { id?: unknown; name?: unknown }[])
+    .filter(card => typeof card.id === 'string' && typeof card.name === 'string')
+    .map(card => ({ id: card.id as string, name: card.name as string }))
 }
 
 async function loadWorldbook(workspaceId: string): Promise<WorldbookEntryView[]> {
@@ -156,9 +176,8 @@ export async function importWorldbook(workspaceId: string, text: string): Promis
 /**
  * Decide which entries a sample line would activate.
  *
- * Mirrors the host matcher for the fields the editor exposes, so the preview
- * answers the author's question without a round trip. It intentionally ignores
- * the token budget: the panel reports activation, not the final cut.
+ * Runs the shared matching engine with an empty stage, so the panel reports
+ * exactly the activation the host would compute for that line.
  * @param entries - stored entries.
  * @param sample - text to scan.
  * @returns activated entries in injection order.
@@ -167,24 +186,17 @@ export function previewActivation(
   entries: readonly WorldbookEntryView[],
   sample: string,
 ): WorldbookEntryView[] {
-  const haystack = sample.toLowerCase()
-  return entries
-    .filter(entry => entry.enabled && entry.content.trim().length > 0)
-    .filter((entry) => {
-      if (entry.constant) return true
-      if (entry.keys.length === 0) return false
-      const primary = entry.keys.some(key => haystack.includes(key.toLowerCase()))
-      if (!primary) return false
-      if (entry.secondaryKeys.length === 0) return true
-      const hits = entry.secondaryKeys.map(key => haystack.includes(key.toLowerCase()))
-      switch (entry.logic) {
-        case 'and_all': return hits.every(Boolean)
-        case 'not_any': return !hits.some(Boolean)
-        case 'not_all': return !hits.every(Boolean)
-        default: return hits.some(Boolean)
-      }
-    })
-    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+  // The preview answers "would this entry activate at all", so it runs the
+  // matching rules only; visibility is reported separately by the group the
+  // entry sits in. Reading it as a director keeps every entry eligible.
+  const lore = activateEntries({
+    entries,
+    scanText: sample,
+    recentLines: [],
+    reader: { kind: 'director' },
+  })
+  const ids = new Set(lore.map(entry => entry.id))
+  return entries.filter(entry => ids.has(entry.id))
 }
 
 /** One labelled field row. */
@@ -234,6 +246,8 @@ export interface WorldbookWorkbenchProps {
  */
 export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement {
   const [state, setState] = useState<WorkbenchState>(INITIAL)
+  // Character cards the "visible to these characters" picker offers.
+  const [characters, setCharacters] = useState<readonly { id: string; name: string }[]>([])
   const [draft, setDraft] = useState<WorldbookEntryView | null>(null)
 
   const reload = useCallback(async (notice: string | null = null) => {
@@ -248,8 +262,9 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
   useEffect(() => {
     setState(INITIAL)
     setDraft(null)
+    void loadCharacters(props.workspaceId).then(setCharacters).catch(() => setCharacters([]))
     void reload(null)
-  }, [reload])
+  }, [reload, props.workspaceId])
 
   const commit = useCallback(async (
     entries: readonly WorldbookEntryView[],
@@ -357,19 +372,28 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
         : state.entries.length === 0
           ? createElement('div', { className: 'dshtavern-wb-empty' },
             '还没有条目。世界书条目按关键词触发，工作区内所有角色共享。')
-          : state.entries.map(entry => createElement('button', {
-            key: entry.id,
-            type: 'button',
-            className: 'dshtavern-wb-row',
-            'data-selected': selected?.id === entry.id,
-            onClick: () => setDraft({ ...entry }),
-          },
-          createElement('span', { className: 'dshtavern-wb-row-name' }, entry.name),
-          createElement('span', { className: 'dshtavern-wb-row-meta' },
-            entry.constant ? '常驻' : entry.keys.slice(0, 3).join(' / ') || '无关键词'),
-          entry.audience === 'director'
-            ? createElement('span', { className: 'dshtavern-wb-flag' }, '导演可见')
-            : null))))
+          : (['all', 'characters', 'director'] as WorldbookVisibility[]).map(visibility => {
+            const group = state.entries.filter(entry => entry.visibility === visibility)
+            if (group.length === 0) return null
+            return createElement('div', { key: visibility, className: 'dshtavern-wb-group' },
+              createElement('div', { className: 'dshtavern-wb-group-head' },
+                createElement('span', { className: 'dshtavern-wb-group-title' }, VISIBILITY_LABELS[visibility]),
+                createElement('span', { className: 'dshtavern-wb-group-count' }, String(group.length))),
+              group.map(entry => createElement('button', {
+                key: entry.id,
+                type: 'button',
+                className: 'dshtavern-wb-row',
+                'data-selected': selected?.id === entry.id,
+                'data-disabled': entry.enabled ? undefined : 'true',
+                onClick: () => setDraft({ ...entry }),
+              },
+              createElement('span', { className: 'dshtavern-wb-row-name' }, entry.name),
+              createElement('span', { className: 'dshtavern-wb-row-meta' },
+                entry.constant ? '常驻' : entry.keys.slice(0, 3).join(' / ') || '无关键词'),
+              entry.enabled
+                ? null
+                : createElement('span', { className: 'dshtavern-wb-flag' }, '已停用'))))
+          })))
 
   const previewPane = createElement('div', { className: 'dshtavern-wb-preview' },
     createElement('div', { className: 'dshtavern-wb-label' }, '触发预览'),
@@ -388,8 +412,7 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
           previewHits.map(entry => createElement('div', { key: entry.id, className: 'dshtavern-wb-hit' },
             createElement('span', null, entry.name),
             createElement('span', { className: 'dshtavern-wb-hit-meta' },
-              POSITION_LABELS[entry.position]
-              + (entry.audience === 'director' ? ' · 导演可见' : ''))))))
+              VISIBILITY_LABELS[entry.visibility])))))
 
   const editor = selected === null
     ? createElement('div', { className: 'dshtavern-wb-placeholder' },
@@ -437,15 +460,42 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
           }),
         }),
         Field({
-          label: '插入位置',
+          label: '可见性',
+          hint: '谁能在提示词里读到这条设定。导演始终能读到全部。',
           children: createElement('select', {
             className: 'dshtavern-wb-input',
-            value: selected.position,
+            value: selected.visibility,
             onChange: (event: { target: { value: string } }) =>
-              update(draft, setDraft, { position: event.target.value as WorldbookPosition }),
-          }, (Object.keys(POSITION_LABELS) as WorldbookPosition[]).map(key =>
-            createElement('option', { key, value: key }, POSITION_LABELS[key]))),
+              update(draft, setDraft, { visibility: event.target.value as WorldbookVisibility }),
+          }, (Object.keys(VISIBILITY_LABELS) as WorldbookVisibility[]).map(key =>
+            createElement('option', { key, value: key }, VISIBILITY_LABELS[key]))),
         })),
+      selected.visibility === 'characters'
+        ? Field({
+          label: '可见的角色',
+          hint: characters.length === 0
+            ? '这个酒馆还没有角色卡。'
+            : '只有选中的角色会在自己的提示词里读到这条。',
+          children: createElement('div', { className: 'dshtavern-wb-chars' },
+            characters.length === 0
+              ? createElement('span', { className: 'dshtavern-wb-hint' }, '（暂无角色卡）')
+              : characters.map(character => createElement('label', {
+                key: character.id,
+                className: 'dshtavern-wb-toggle',
+              },
+              createElement('input', {
+                type: 'checkbox',
+                checked: selected.characterIds.includes(character.id),
+                onChange: (event: { target: { checked: boolean } }) =>
+                  update(draft, setDraft, {
+                    characterIds: event.target.checked
+                      ? [...selected.characterIds, character.id]
+                      : selected.characterIds.filter(id => id !== character.id),
+                  }),
+              }),
+              character.name))),
+        })
+        : null,
       Field({
         label: '关键词（任意一个出现即触发）',
         hint: '逗号分隔。留空且未开常驻时，这条永远不会触发。',
@@ -531,11 +581,6 @@ export function WorldbookWorkbench(props: WorldbookWorkbenchProps): ReactElement
           label: '整词匹配',
           checked: selected.wholeWords,
           onChange: value => update(draft, setDraft, { wholeWords: value }),
-        }),
-        Toggle({
-          label: '仅导演可见',
-          checked: selected.audience === 'director',
-          onChange: value => update(draft, setDraft, { audience: value ? 'director' : 'all' }),
         })),
       previewPane)
 

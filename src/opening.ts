@@ -85,9 +85,11 @@ export function buildOpeningSystem(input: {
     entries: input.worldbook ?? [],
     scanText: '',
     recentLines: [],
-    audience: 'character',
+    // An opening is written before any character speaks, so it uses the widest
+    // reader: everything the director could know is fair game.
+    reader: { kind: 'director' },
   })
-  const loreText = renderLore([...lore.before, ...lore.after, ...lore.tail])
+  const loreText = renderLore(lore)
 
   return [
     '你是这场角色扮演的开场编剧。玩家还没有开口，你要先把这一场戏立起来。',

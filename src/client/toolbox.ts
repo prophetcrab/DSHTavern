@@ -17,6 +17,7 @@ import { PromptOrchestration } from './prompt.js'
 import { AgentPanel } from './agent.js'
 import { CharacterCardTool } from './characters.js'
 import { WorldbookWorkbench } from './worldbook.js'
+import { PersonaWorkbench } from './persona.js'
 import { UsagePanel } from './stats.js'
 import { TrackerPanel } from './tracker.js'
 import { installTrackedTurnMarks, refreshTrackedTurns } from './tracked-marks.js'
@@ -39,7 +40,7 @@ export interface TavernToolboxStation {
 }
 
 /** Tool identities shown by the toolbox. */
-export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'worldbooks' | 'usage' | 'tracker' | 'settings'
+export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'persona' | 'worldbooks' | 'usage' | 'tracker'
 
 /** Launcher position in viewport pixels (top-left corner). */
 export interface FabPosition {
@@ -362,7 +363,7 @@ const TOOLS: readonly ToolEntry[] = [
   { id: 'worldbooks', glyph: '书', label: '世界书', enabled: true },
   { id: 'usage', glyph: '量', label: '用量统计', enabled: true },
   { id: 'tracker', glyph: '追', label: '剧情回顾', enabled: true },
-  { id: 'settings', glyph: '设', label: '设置', enabled: false },
+  { id: 'persona', glyph: '我', label: '玩家人设', enabled: true },
 ]
 
 /** Launcher glyph: a toolbox outline, drawn as artwork. */
@@ -494,6 +495,12 @@ function ToolWindow(): ReactElement | null {
             workspaceTitle: station.workspaceTitle,
             workspacePath: station.workspacePath,
           })
+          : tool === 'persona'
+            ? createElement(PersonaWorkbench, {
+              workspaceId: station.workspaceId,
+              workspaceTitle: station.workspaceTitle,
+              workspacePath: station.workspacePath,
+            })
           : tool === 'usage'
             ? createElement(UsagePanel, {
               workspaceId: station.workspaceId,

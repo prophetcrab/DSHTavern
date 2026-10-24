@@ -350,12 +350,13 @@ describe('character prompt', () => {
     expect(system).not.toContain('你现在就是')
   })
 
-  it('keeps a tail-position lore entry in the layout-controlled block', () => {
+  it('keeps every visible entry in the single worldbook block', () => {
     const tailEntry = {
       id: 'tail-1', name: '夜巡规则', content: '午夜后不许开窗。',
       keys: ['午夜'], secondaryKeys: [], logic: 'and_any' as const, constant: false,
-      position: 'tail' as const, order: 100, depth: 6, enabled: true,
-      caseSensitive: false, wholeWords: false, audience: 'all' as const,
+      order: 100, depth: 6, enabled: true,
+      caseSensitive: false, wholeWords: false,
+      visibility: 'all' as const, characterIds: [],
     }
     const withTail = buildCharacterSystem({
       layout: defaultPromptLayout(),
@@ -370,7 +371,7 @@ describe('character prompt', () => {
     const withoutTail = buildCharacterSystem({
       layout: {
         ...layout,
-        blocks: layout.blocks.map(block => block.id === 'lore-tail' ? { ...block, enabled: false } : block),
+        blocks: layout.blocks.map(block => block.id === 'worldbook' ? { ...block, enabled: false } : block),
       },
       card: card(),
       stage: [],
@@ -632,5 +633,79 @@ describe('prompt preview', () => {
       cards: [],
       worldbook: [],
     })).toThrow()
+  })
+})
+
+describe('player persona in the character prompt', () => {
+  it('replaces the user-persona block with the configured persona', () => {
+    const system = buildCharacterSystem({
+      layout: defaultPromptLayout(),
+      card: card(),
+      stage: [],
+      persona: '玩家扮演「林澈」。\n外观：深灰风衣',
+    })
+    expect(system).toContain('玩家扮演「林澈」')
+    expect(system).toContain('外观：深灰风衣')
+    // The catalogue placeholder must not survive beside the real persona.
+    expect(system).not.toContain('普通旅人')
+  })
+
+  it('keeps the default block when no persona is configured', () => {
+    const system = buildCharacterSystem({ layout: defaultPromptLayout(), card: card(), stage: [] })
+    expect(system).toContain('普通旅人')
+  })
+
+  it('ignores a blank persona instead of emitting an empty block', () => {
+    const system = buildCharacterSystem({
+      layout: defaultPromptLayout(),
+      card: card(),
+      stage: [],
+      persona: '   ',
+    })
+    expect(system).toContain('普通旅人')
+  })
+})
+
+describe('persona selection in the layout', () => {
+  it('renders the persona the layout names', () => {
+    const layout = defaultPromptLayout()
+    const blocks = layout.blocks.map(block => block.id === 'user-persona'
+      ? { ...block, personaId: 'p2' }
+      : block)
+    const system = buildCharacterSystem({
+      layout: { ...layout, blocks },
+      card: card(),
+      stage: [],
+      persona: '玩家扮演「预设」。',
+      personaById: { p1: '玩家扮演「甲」。', p2: '玩家扮演「乙」。' },
+    })
+    expect(system).toContain('玩家扮演「乙」')
+    expect(system).not.toContain('玩家扮演「预设」')
+  })
+
+  it('falls back to the preset when the layout names none', () => {
+    const system = buildCharacterSystem({
+      layout: defaultPromptLayout(),
+      card: card(),
+      stage: [],
+      persona: '玩家扮演「预设」。',
+      personaById: { p1: '玩家扮演「甲」。' },
+    })
+    expect(system).toContain('玩家扮演「预设」')
+  })
+
+  it('falls back to the preset when the named persona no longer exists', () => {
+    const layout = defaultPromptLayout()
+    const blocks = layout.blocks.map(block => block.id === 'user-persona'
+      ? { ...block, personaId: 'gone' }
+      : block)
+    const system = buildCharacterSystem({
+      layout: { ...layout, blocks },
+      card: card(),
+      stage: [],
+      persona: '玩家扮演「预设」。',
+      personaById: {},
+    })
+    expect(system).toContain('玩家扮演「预设」')
   })
 })

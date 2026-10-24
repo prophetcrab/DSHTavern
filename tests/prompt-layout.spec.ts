@@ -124,10 +124,24 @@ describe('normalizePromptBlocks', () => {
     })))).toThrow(/too large/)
   })
 
-  it('rejects duplicates and missing blocks', () => {
-    const duplicated = [...PROMPT_BLOCK_IDS.map(id => ({ id, enabled: true })), { id: 'main-template', enabled: true }]
-    expect(() => normalizePromptBlocks(duplicated)).toThrow(/duplicate/)
+  it('rejects a layout that is missing blocks', () => {
     expect(() => normalizePromptBlocks([{ id: 'main-template', enabled: true }])).toThrow(/missing/)
+  })
+
+  it('collapses the legacy worldbook block ids onto one block', () => {
+    const legacy = [
+      { id: 'main-template', enabled: true },
+      { id: 'worldbook-before', enabled: false },
+      { id: 'worldbook-after', enabled: false },
+      { id: 'lore-tail', enabled: true },
+      ...PROMPT_BLOCK_IDS
+        .filter(id => id !== 'main-template' && id !== 'worldbook')
+        .map(id => ({ id, enabled: true })),
+    ]
+    const blocks = normalizePromptBlocks(legacy)
+    expect(blocks.filter(block => block.id === 'worldbook')).toHaveLength(1)
+    // One legacy block being enabled keeps the merged block enabled.
+    expect(blocks.find(block => block.id === 'worldbook')?.enabled).toBe(true)
   })
 })
 

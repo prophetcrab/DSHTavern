@@ -21,6 +21,10 @@ export type PromptBlockSource =
 /** One system-prompt block in the assembly order. */
 export interface PromptBlockView {
   readonly id: string
+  /** Whether this block renders a chosen persona instead of its own text. */
+  readonly selectsPersona?: boolean
+  /** Persona the block renders; absent means "follow the preset". */
+  readonly personaId?: string
   /** Which prompt this block belongs to. */
   readonly appliesTo?: PromptScope
   readonly label: string
@@ -181,6 +185,39 @@ export interface PromptPreview {
   readonly sample: string
 }
 
+/** Personas the prompt picker can offer for one workspace. */
+export interface PersonaOptions {
+  readonly personas: readonly { id: string; name: string }[]
+  /** Name of the workspace preset persona, when one is active. */
+  readonly presetName?: string
+}
+
+/**
+ * Load the persona choices one workspace offers.
+ *
+ * The persona library is workspace-scoped, so the picker offers exactly the
+ * entries the persona workbench manages.
+ * @param workspaceId - tavern workspace id.
+ * @returns the selectable personas and the preset's name.
+ */
+export async function fetchPersonaOptions(workspaceId: string): Promise<PersonaOptions> {
+  const response = await fetch(`/tavern/personas?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    headers: { accept: 'application/json' },
+    cache: 'no-store',
+  })
+  const body = await readJsonResponse(response)
+  const personas = Array.isArray(body.personas)
+    ? (body.personas as { id?: unknown; name?: unknown }[])
+      .filter(item => typeof item.id === 'string' && typeof item.name === 'string')
+      .map(item => ({ id: item.id as string, name: item.name as string }))
+    : []
+  const activeId = typeof body.activeId === 'string' ? body.activeId : undefined
+  const presetName = activeId === undefined
+    ? undefined
+    : personas.find(persona => persona.id === activeId)?.name ?? personas[0]?.name
+  return { personas, ...(presetName === undefined ? {} : { presetName }) }
+}
+
 /**
  * Ask the host to assemble a prompt for inspection.
  *
@@ -221,6 +258,12 @@ export interface PromptCardProps {
   readonly onDragEnd: () => void
   readonly onToggle: (id: string) => void
   readonly onOpen: () => void
+  /** Personas the picker may offer; empty when the workspace has none. */
+  readonly personas: readonly { id: string; name: string }[]
+  /** Preset persona name, shown on the "follow preset" option. */
+  readonly presetName?: string
+  /** Pick one persona for this block, or `undefined` to follow the preset. */
+  readonly onPickPersona: (id: string | undefined) => void
 }
 
 /**
@@ -275,7 +318,23 @@ export function PromptCardView(props: PromptCardProps): ReactElement {
       block.overridden
         ? createElement('span', { key: 'mod', className: 'dshtavern-pill', 'data-tone': 'ok' }, '已修改')
         : null),
-    createElement('div', { key: 'hint', className: CLASS.hint }, block.description)),
+    createElement('div', { key: 'hint', className: CLASS.hint }, block.description),
+    block.selectsPersona
+      ? createElement('div', { key: 'persona', className: 'dshtavern-prompt-persona' },
+        createElement('select', {
+          className: 'dshtavern-wb-input',
+          value: block.personaId ?? '',
+          disabled: props.disabled,
+          'aria-label': '选择人设',
+          onClick: (event: { stopPropagation(): void }) => event.stopPropagation(),
+          onChange: (event: { target: { value: string } }) =>
+            props.onPickPersona(event.target.value === '' ? undefined : event.target.value),
+        },
+        createElement('option', { value: '' },
+          props.presetName === undefined ? '跟随预设人设' : `跟随预设：${props.presetName}`),
+        props.personas.map(persona =>
+          createElement('option', { key: persona.id, value: persona.id }, persona.name))))
+      : null),
   createElement('div', { key: 'side', className: 'dshtavern-prompt-side' },
     createElement('span', {
       key: 'chars',
@@ -433,6 +492,10 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
   const [preview, setPreview] = useState<PromptPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  // Personas the picker offers, plus the workspace preset name it shows on the
+  // "follow preset" option.
+  const [personas, setPersonas] = useState<readonly { id: string; name: string }[]>([])
+  const [presetPersonaName, setPresetPersonaName] = useState<string | undefined>(undefined)
   // The picker lists the workspace's real cards. Reading them from the preview
   // response would leave only a placeholder until the first preview ran.
   const [previewCards, setPreviewCards] = useState<readonly { id: string; name: string }[]>([])
@@ -478,6 +541,11 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
     setError(null)
     setNotice(null)
     setBlocks([])
+    void fetchPersonaOptions(props.workspaceId).then((options) => {
+      if (cancelled) return
+      setPersonas(options.personas)
+      setPresetPersonaName(options.presetName)
+    }).catch(() => undefined)
     fetchPromptLayout(props.workspaceId, scope).then(layout => {
       if (cancelled) return
       setBlocks(layout.blocks)
@@ -517,6 +585,32 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
       setDragOver(null)
     }
   }, [props.workspaceId, scope])
+
+  const pickPersona = useCallback(async (blockId: string, personaId: string | undefined) => {
+    const next = blocks.map(block => block.id === blockId
+      ? { ...block, personaId }
+      : block)
+    setBlocks(next)
+    setSaving(true)
+    setError(null)
+    try {
+      const layout = await savePromptLayout(props.workspaceId, {
+        blocks: next.map(block => ({
+          id: block.id,
+          enabled: block.enabled,
+          content: block.content,
+          ...(block.personaId === undefined ? {} : { personaId: block.personaId }),
+        })),
+      }, scope)
+      setBlocks(layout.blocks)
+      setSavedAt(layout.savedAt ?? null)
+      setNotice(personaId === undefined ? '已改为跟随预设人设' : '已选择人设')
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setSaving(false)
+    }
+  }, [blocks, props.workspaceId, scope])
 
   const onDragStart = useCallback((index: number) => {
     setDragFrom(index)
@@ -725,6 +819,9 @@ export function PromptOrchestration(props: PromptOrchestrationProps): ReactEleme
           onDragEnd: () => { setDragFrom(null); setDragOver(null) },
           onToggle,
           onOpen: () => onOpenEditor(block),
+          personas,
+          ...(presetPersonaName === undefined ? {} : { presetName: presetPersonaName }),
+          onPickPersona: (id) => { void pickPersona(block.id, id) },
         }))),
     editingBlock === null
       ? null
