@@ -146,6 +146,26 @@ node scripts/pack.mjs
 
 它会构建、跑测试、刷新 `lib/`、写出 `dist/dshtavern-<version>.tgz` 并清掉旧版本。**改了源码要记得跑**——`lib/` 现在是提交进仓库的，忘了更新，别人装到的还是旧代码。
 
+### 安装报 `ERR_PNPM_EPERM`
+
+如果这个 profile 之前用 `link:` 指向过本地源码目录，再改装 git 版本会失败：
+
+```text
+ERR_PNPM_EPERM [importPackage ...\node_modules\dshtavern]
+EPERM: operation not permitted, symlink 'D:\...\DSHTavern\node_modules\...'
+```
+
+原因不在包本身：`dsh plugin remove` 只删清单里的条目，`node_modules/dshtavern` 那个符号链接会留下，pnpm 于是顺着它去解析本地项目的 peer 依赖，试图把源码树里的链接搬进 profile——Windows 和 macOS 都会拒绝。
+
+删掉残留再装一次即可：
+
+```sh
+rm ~/.dsh/profiles/web/node_modules/dshtavern     # Windows: rmdir /s /q ...
+npx @deepseek-ai/dsh plugin --profile web add github:prophetcrab/DSHTavern
+```
+
+`node_modules/.pnpm` 里没有残留时不必清它。
+
 ### 从源码开发（宿主 checkout）
 
 ```sh
