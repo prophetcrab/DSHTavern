@@ -1,8 +1,12 @@
 node_modules/
-lib/
 *.tsbuildinfo
 .DS_Store
 
 # Local scratch scripts and captured session dumps.
 .tmp-*
 *.log
+
+# `lib/` is committed on purpose: DSH installs a plugin straight from a Git
+# repository, and it does not build one. Shipping the compiled output is what
+# makes `add github:prophetcrab/DSHTavern` work without a clone or a build step.
+# Regenerate it with `node scripts/pack.mjs` before committing.
