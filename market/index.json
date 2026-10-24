@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "title": {
+    "en": "DSH Tavern",
+    "zh": "DSH 酒馆"
+  },
+  "description": {
+    "en": "Role-play bundles for DeepSeek Harness.",
+    "zh": "DeepSeek Harness 的角色扮演插件。"
+  },
+  "metadata": {
+    "categories": {
+      "roleplay": {
+        "title": {
+          "en": "Role-play",
+          "zh": "角色扮演"
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "dshtavern",
+      "title": {
+        "en": "DSH Tavern",
+        "zh": "DSH 酒馆"
+      },
+      "description": {
+        "en": "A director plans each scene and picks who speaks; every character answers from its own card in a separate call, so voices stay distinct and secrets stay put.",
+        "zh": "导演负责旁白与调度，每个角色用自己的角色卡独立回应一次。语气不会互相污染，秘密也不会串到不该知道的人那里。"
+      },
+      "icon": "icons/tavern.svg",
+      "author": "prophetcrab",
+      "homepage": "https://github.com/prophetcrab/DSHTavern",
+      "repository": {
+        "url": "https://github.com/prophetcrab/DSHTavern"
+      },
+      "metadata": {
+        "category": "roleplay",
+        "keywords": [
+          "roleplay",
+          "tavern",
+          "character-card",
+          "worldbook",
+          "sillytavern",
+          "director"
+        ]
+      },
+      "dist-tags": {
+        "latest": "0.1.0"
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792886400,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}

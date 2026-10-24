@@ -3,6 +3,26 @@
   "version": "0.1.0",
   "description": "Turn the DeepSeek Harness into a role-play tavern: mark a folder as a tavern, and every chat inside it gets a director who narrates and picks who speaks while each character answers from its own card in a separate call.",
   "license": "MIT",
+  "author": "prophetcrab",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prophetcrab/DSHTavern.git"
+  },
+  "homepage": "https://github.com/prophetcrab/DSHTavern#readme",
+  "bugs": {
+    "url": "https://github.com/prophetcrab/DSHTavern/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "roleplay",
+    "tavern",
+    "sillytavern",
+    "character-card",
+    "worldbook"
+  ],
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -73,7 +93,8 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.types.json && tsdown -c tsdown.config.ts",
     "bundle": "tsdown -c tsdown.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build && pnpm test"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",

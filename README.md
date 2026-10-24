@@ -29,7 +29,7 @@
 
 | 面板 | 内容 |
 |---|---|
-| 提示词编排 | 15 个角色块 / 8 个导演块；拖拽排序、启停、编辑、预览、恢复默认 |
+| 提示词编排 | 13 个角色块 / 8 个导演块；拖拽排序、启停、编辑、预览、恢复默认 |
 | Agent 编排 | 这一幕 / 上下文 / 模型 / 回复长度四个子页：每幕发言上限、上下文预算（四档一键预设，最大按 1M 窗口标定）、玩家点名优先、导演与角色各自的模型、统一/逐角色回复长度、推理预留 |
 | 角色卡 | 角色卡 CRUD，导入/导出单文件 `.charc`；新会话会先由模型生成一段完整开场（场景 + 角色开口） |
 | 世界书 | 工作区级条目编辑与触发预览，整本导入/导出 `.world` |
@@ -106,7 +106,22 @@ node scripts/selftest-write.mjs --base http://127.0.0.1:3080
 
 ## 安装
 
-### 从 GitHub 下载安装（普通用户）
+### 从 npm 安装（一条命令）
+
+发布之后不再需要 clone 和 build：
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add dshtavern
+```
+
+配合密钥与启动：
+
+```sh
+echo "DEEPSEEK_API_KEY=<你的密钥>" >> ~/.dsh/.env
+npx @deepseek-ai/dsh web
+```
+
+### 从 GitHub 下载安装（未发布时的做法）
 
 不需要预先安装或克隆 DeepSeek Harness，`npx` 会拉起它：
 
@@ -136,6 +151,49 @@ npx @deepseek-ai/dsh web
 
 - **不能直接 `add github:prophetcrab/DSHTavern`**。仓库里不含 `lib/`（构建产物不入库），git 直装会装上一个没有产物的空壳，启动时报找不到 `lib/...`。必须先 clone 再 `pnpm build`，然后 `add` 这个本地目录。
 - 在插件目录之外执行第 2 步时，把 `.` 换成绝对路径，用正斜杠（`D:/project/DSHTavern`）。Git Bash 会把反斜杠当转义符，写成 `D:\project\DSHTavern` 会被解析成不存在的 `D:projectDSHTavern`。
+
+### 发布到 npm
+
+发布一次，之后所有人都能一条命令安装。脚本会依次构建、跑测试、发布，并把 `market/index.json` 里的版本号与真实发布时间同步：
+
+```sh
+npm login --registry https://registry.npmjs.org/
+node scripts/publish.mjs
+```
+
+先预演（只构建、测试、打包，不发布）：
+
+```sh
+node scripts/publish.mjs --dry-run
+```
+
+注意三点：
+
+- **本机 npm 默认指向 `registry.npmmirror.com`**，那是只读镜像，不能发布。脚本里把 `--registry https://registry.npmjs.org/` 写死了，绕开这个默认值；`npm login` 也要显式指定同一个源。
+- `lib/` 在 `.gitignore` 里但 npm 打包会读本地目录，所以 `package.json` 挂了 `prepublishOnly: pnpm build && pnpm test`，防止漏构建发出空包。
+- 包名 `dshtavern` 目前未被占用；一旦发布，版本号不可复用，再发必须升 `version`。
+
+### 插件市场索引
+
+DSH 没有官方市场，Discover 页读的是作者自己托管的 `index.json`。仓库里的 `market/` 就是可以直接静态托管的成品：
+
+```text
+market/
+  index.json          # 列出 dshtavern 及其版本、来源、兼容范围
+  icons/tavern.svg    # 相对 index.json 解析
+```
+
+把 `market/` 部署到任意 https 静态主机（GitHub Pages、对象存储均可），然后在 DSH 里打开「插件 → 实验性插件 → 自定义插件索引」，把 `index.json` 的 URL 添加为索引源，之后就能在 Discover 里点装。
+
+索引格式有三条硬性要求，缺一条整个文件会被拒绝：`engines.dsh` 必须是合法的 semver range（本插件为 `>=0.2.1-rc.2 <0.3.0`）、`dsh.bundle` 必须存在、`versions[].publishTimestamp` 必须是真实发布时间的 Unix 秒。前两条已在 `package.json` 里声明，第三条由 `scripts/publish.mjs` 自动写入。格式可用官方校验器自测：
+
+```sh
+node -e "
+const { parseMarketIndex } = require('<deepseek-harness>/packages/util/plugin-market-index/lib/index.js')
+parseMarketIndex(require('./market/index.json'), 'https://example.com/index.json')
+console.log('valid')
+"
+```
 
 ### 从源码开发（宿主 checkout）
 
