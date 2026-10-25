@@ -46,17 +46,14 @@
           "director"
         ]
       },
-      "dist-tags": {
-        "latest": "0.1.0"
-      },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishTimestamp": 1792858882,
+          "version": "0.2.0",
+          "publishTimestamp": 1792893676,
           "source": {
             "type": "git",
             "url": "https://github.com/prophetcrab/DSHTavern",
-            "commit": "94b61e82c7ea1c991d30335d81d8d52987bab251"
+            "commit": "62b9cc60fd02daa9b4902ce68866438316d7633a"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
