@@ -88,7 +88,14 @@ export interface TavernAgentConfig {
     /** Character model; omitted follows the session's model. */
     readonly characterModel?: AgentModelChoice;
 }
-/** Inclusive bounds enforced on every field. */
+/**
+ * Inclusive bounds enforced on every field.
+ *
+ * Both official models declare a 1,048,576-token window, and DeepSeek's
+ * tokenizer spends about 0.6 token per Chinese character, so the whole window
+ * holds roughly 1.7M characters. The ceilings below let the largest preset use
+ * most of that while leaving room for the system prompt, the card, and the reply.
+ */
 export declare const AGENT_CONFIG_LIMITS: {
     readonly maxSpeechesPerBeat: {
         readonly min: 1;
@@ -96,15 +103,15 @@ export declare const AGENT_CONFIG_LIMITS: {
     };
     readonly stageWindow: {
         readonly min: 4;
-        readonly max: 2000;
+        readonly max: 20000;
     };
     readonly stageMaxChars: {
         readonly min: 1000;
-        readonly max: 400000;
+        readonly max: 1200000;
     };
     readonly loreScanLines: {
         readonly min: 4;
-        readonly max: 2000;
+        readonly max: 20000;
     };
     readonly loreMaxEntries: {
         readonly min: 1;
@@ -112,11 +119,11 @@ export declare const AGENT_CONFIG_LIMITS: {
     };
     readonly loreMaxChars: {
         readonly min: 200;
-        readonly max: 400000;
+        readonly max: 600000;
     };
     readonly playerInputMax: {
         readonly min: 200;
-        readonly max: 120000;
+        readonly max: 400000;
     };
     readonly maxReplyChars: {
         readonly min: 20;
@@ -127,12 +134,25 @@ export declare const AGENT_CONFIG_LIMITS: {
         readonly max: 16000;
     };
 };
+/** One context-budget preset: the five budget fields plus an optional character cap. */
+export interface ContextPreset {
+    readonly label: string;
+    readonly stageWindow: number;
+    readonly stageMaxChars?: number;
+    readonly loreScanLines: number;
+    readonly loreMaxEntries: number;
+    readonly loreMaxChars: number;
+    readonly playerInputMax: number;
+}
 /**
- * Context budget presets, from the shipped defaults to a 1M-context setting.
+ * Context budget presets, from the shipped defaults to one sized for the full
+ * 1M-token window.
  *
- * `extreme` sums to roughly 420k tokens of history and lore at typical line
- * lengths, so it stays inside a 1M window alongside the system prompt and the
- * reply while using far more of it than the old ceilings allowed.
+ * `full` spends roughly 480k tokens on the stage and 180k on lore at typical
+ * line lengths — about two thirds of a 1M window — leaving the balance for the
+ * system prompt, the card, and the reply. It carries character caps because a
+ * line budget alone stops being predictable once it is this large: a few long
+ * narration lines could otherwise reach the window on their own.
  */
 export declare const CONTEXT_PRESETS: {
     readonly compact: {
@@ -162,10 +182,20 @@ export declare const CONTEXT_PRESETS: {
     readonly extreme: {
         readonly label: "极限";
         readonly stageWindow: 2000;
+        readonly stageMaxChars: 400000;
         readonly loreScanLines: 500;
         readonly loreMaxEntries: 200;
         readonly loreMaxChars: 400000;
         readonly playerInputMax: 120000;
+    };
+    readonly full: {
+        readonly label: "满窗口";
+        readonly stageWindow: 8000;
+        readonly stageMaxChars: 800000;
+        readonly loreScanLines: 3000;
+        readonly loreMaxEntries: 200;
+        readonly loreMaxChars: 300000;
+        readonly playerInputMax: 200000;
     };
 };
 /** Which preset, if any, matches a budget; `undefined` when it is a custom mix. */

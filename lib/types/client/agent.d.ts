@@ -105,8 +105,9 @@ export declare const AGENT_LIMITS: {
 /**
  * Context budget presets, mirrored from the host.
  *
- * The shipped defaults were sized for a small window; these scale up to what a
- * 1M-token context can actually use.
+ * The shipped defaults were sized for a small window; `full` is sized for the
+ * 1,048,576-token window both official models declare, leaving room for the
+ * system prompt, the card, and the reply.
  */
 export declare const CONTEXT_PRESETS: {
     readonly compact: {
@@ -136,10 +137,20 @@ export declare const CONTEXT_PRESETS: {
     readonly extreme: {
         readonly label: "极限";
         readonly stageWindow: 2000;
+        readonly stageMaxChars: 400000;
         readonly loreScanLines: 500;
         readonly loreMaxEntries: 200;
         readonly loreMaxChars: 400000;
         readonly playerInputMax: 120000;
+    };
+    readonly full: {
+        readonly label: "满窗口";
+        readonly stageWindow: 8000;
+        readonly stageMaxChars: 800000;
+        readonly loreScanLines: 3000;
+        readonly loreMaxEntries: 200;
+        readonly loreMaxChars: 300000;
+        readonly playerInputMax: 200000;
     };
 };
 type ContextPresetId = keyof typeof CONTEXT_PRESETS;

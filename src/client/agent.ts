@@ -80,17 +80,30 @@ type RequiredNumericField = Exclude<NumericField, 'maxReplyChars' | 'reasoningRe
 /**
  * Context budget presets, mirrored from the host.
  *
- * The shipped defaults were sized for a small window; these scale up to what a
- * 1M-token context can actually use.
+ * The shipped defaults were sized for a small window; `full` is sized for the
+ * 1,048,576-token window both official models declare, leaving room for the
+ * system prompt, the card, and the reply.
  */
 export const CONTEXT_PRESETS = {
   compact: { label: '精简', stageWindow: 40, loreScanLines: 20, loreMaxEntries: 8, loreMaxChars: 6000, playerInputMax: 8000 },
   standard: { label: '标准', stageWindow: 200, loreScanLines: 60, loreMaxEntries: 24, loreMaxChars: 40_000, playerInputMax: 20_000 },
   roomy: { label: '充裕', stageWindow: 800, loreScanLines: 200, loreMaxEntries: 80, loreMaxChars: 160_000, playerInputMax: 60_000 },
-  extreme: { label: '极限', stageWindow: 2000, loreScanLines: 500, loreMaxEntries: 200, loreMaxChars: 400_000, playerInputMax: 120_000 },
+  extreme: {
+    label: '极限', stageWindow: 2000, stageMaxChars: 400_000,
+    loreScanLines: 500, loreMaxEntries: 200, loreMaxChars: 400_000, playerInputMax: 120_000,
+  },
+  full: {
+    label: '满窗口', stageWindow: 8000, stageMaxChars: 800_000,
+    loreScanLines: 3000, loreMaxEntries: 200, loreMaxChars: 300_000, playerInputMax: 200_000,
+  },
 } as const
 
 type ContextPresetId = keyof typeof CONTEXT_PRESETS
+
+/** The optional character cap a preset carries; absent for the small presets. */
+function presetStageMaxChars(preset: (typeof CONTEXT_PRESETS)[ContextPresetId]): number | undefined {
+  return 'stageMaxChars' in preset ? preset.stageMaxChars : undefined
+}
 
 /**
  * Which preset a config currently matches.
@@ -100,6 +113,7 @@ type ContextPresetId = keyof typeof CONTEXT_PRESETS
 export function contextPresetOf(config: AgentConfigView): ContextPresetId | undefined {
   for (const [id, preset] of Object.entries(CONTEXT_PRESETS)) {
     const matches = preset.stageWindow === config.stageWindow
+      && presetStageMaxChars(preset) === (config.stageMaxChars ?? undefined)
       && preset.loreScanLines === config.loreScanLines
       && preset.loreMaxEntries === config.loreMaxEntries
       && preset.loreMaxChars === config.loreMaxChars
@@ -556,6 +570,7 @@ export function AgentPanel(props: AgentPanelProps): ReactElement {
             title: `${preset.stageWindow} 行 / 扫描 ${preset.loreScanLines} 行 / 世界书 ${preset.loreMaxEntries} 条 ${preset.loreMaxChars} 字`,
             onClick: () => update({
               stageWindow: preset.stageWindow,
+              stageMaxChars: presetStageMaxChars(preset),
               loreScanLines: preset.loreScanLines,
               loreMaxEntries: preset.loreMaxEntries,
               loreMaxChars: preset.loreMaxChars,

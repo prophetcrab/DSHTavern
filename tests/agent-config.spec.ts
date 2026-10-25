@@ -51,22 +51,24 @@ describe('agent config validation', () => {
       loreMaxChars: AGENT_CONFIG_LIMITS.loreMaxChars.max,
       playerInputMax: AGENT_CONFIG_LIMITS.playerInputMax.min,
     })
-    expect(config.maxSpeechesPerBeat).toBe(6)
-    expect(config.stageWindow).toBe(4)
-    expect(config.loreScanLines).toBe(2000)
-    expect(config.loreMaxEntries).toBe(1)
-    expect(config.loreMaxChars).toBe(400_000)
-    expect(config.playerInputMax).toBe(200)
+    expect(config.maxSpeechesPerBeat).toBe(AGENT_CONFIG_LIMITS.maxSpeechesPerBeat.max)
+    expect(config.stageWindow).toBe(AGENT_CONFIG_LIMITS.stageWindow.min)
+    expect(config.loreScanLines).toBe(AGENT_CONFIG_LIMITS.loreScanLines.max)
+    expect(config.loreMaxEntries).toBe(AGENT_CONFIG_LIMITS.loreMaxEntries.min)
+    expect(config.loreMaxChars).toBe(AGENT_CONFIG_LIMITS.loreMaxChars.max)
+    expect(config.playerInputMax).toBe(AGENT_CONFIG_LIMITS.playerInputMax.min)
   })
 
+  // One past each bound, derived from the table so raising a ceiling does not
+  // leave a stale literal behind.
   it.each([
-    ['maxSpeechesPerBeat', 0],
-    ['maxSpeechesPerBeat', 7],
-    ['stageWindow', 3],
-    ['loreScanLines', 2001],
-    ['loreMaxEntries', 0],
-    ['loreMaxChars', 199],
-    ['playerInputMax', 120_001],
+    ['maxSpeechesPerBeat', AGENT_CONFIG_LIMITS.maxSpeechesPerBeat.min - 1],
+    ['maxSpeechesPerBeat', AGENT_CONFIG_LIMITS.maxSpeechesPerBeat.max + 1],
+    ['stageWindow', AGENT_CONFIG_LIMITS.stageWindow.min - 1],
+    ['loreScanLines', AGENT_CONFIG_LIMITS.loreScanLines.max + 1],
+    ['loreMaxEntries', AGENT_CONFIG_LIMITS.loreMaxEntries.min - 1],
+    ['loreMaxChars', AGENT_CONFIG_LIMITS.loreMaxChars.min - 1],
+    ['playerInputMax', AGENT_CONFIG_LIMITS.playerInputMax.max + 1],
   ] as const)('rejects %s = %i', (field, value) => {
     expect(() => normalizeAgentConfig({ [field]: value })).toThrow(AgentConfigInvalidError)
   })
