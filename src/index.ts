@@ -1168,11 +1168,37 @@ export class TavernWorkspaceService extends Service {
     let lastSpeech: PreviousTurn | undefined
     const staged: Omit<StageEntry, 'seq' | 'at'>[] = []
     const openingLines: Omit<StageEntry, 'seq' | 'at'>[] = []
+    /**
+     * Emit one finished segment the moment it exists.
+     *
+     * Rendering a single segment and prefixing each later one with a blank line
+     * reproduces {@link renderBeatMarkdown} exactly, so the closing block still
+     * matches what the player watched arrive. Streaming at the segment boundary
+     * — not inside a model call — is what keeps the formatting stable: a
+     * speaker's header and quote marker are only knowable once that speech is
+     * complete, and re-emitting them per token would make the bubble jump.
+     */
+    let streaming = false
+    let streamedText = ''
+    function* emitSegment(segment: BeatSegment): Generator<StreamChunk> {
+      const part = renderBeatMarkdown([segment])
+      if (part.length === 0) return
+      if (streaming) {
+        streamedText = `${streamedText}\n\n${part}`
+        yield { type: 'text-delta', index: 0, text: `\n\n${part}` }
+        return
+      }
+      streaming = true
+      streamedText = part
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'text-delta', index: 0, text: part }
+    }
     if (script !== undefined) {
       for (const segment of script.segments) {
         if (segment.kind === 'narration') {
           openingLines.push({ kind: 'narration', text: segment.text, scope: 'observable' })
           segments.push({ kind: 'narration', text: segment.text })
+          yield* emitSegment({ kind: 'narration', text: segment.text })
           continue
         }
         openingLines.push({
@@ -1183,15 +1209,18 @@ export class TavernWorkspaceService extends Service {
           scope: 'observable',
         })
         segments.push({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
+        yield* emitSegment({ kind: 'speech', name: segment.speakerName ?? '', text: segment.text })
       }
     } else if (staticOpening !== undefined) {
       if (staticOpening.narration !== undefined) {
         openingLines.push(openingNarrationStageLine(staticOpening.narration))
         segments.push({ kind: 'narration', text: staticOpening.narration.text })
+        yield* emitSegment({ kind: 'narration', text: staticOpening.narration.text })
       }
       if (staticOpening.greeting !== undefined) {
         openingLines.push(greetingStageLine(staticOpening.greeting))
         segments.push({ kind: 'speech', name: staticOpening.greeting.name, text: staticOpening.greeting.text })
+        yield* emitSegment({ kind: 'speech', name: staticOpening.greeting.name, text: staticOpening.greeting.text })
       }
     }
     for (const line of openingLines) {
@@ -1283,6 +1312,10 @@ export class TavernWorkspaceService extends Service {
         })
         staged.push({ kind: 'narration', text: decision.narration, scope: 'observable' })
         segments.push({ kind: 'narration', text: decision.narration })
+        // The director has spoken for this turn; the characters it named still
+        // have to answer, so emitting here is what lets the player start
+        // reading before those calls run.
+        yield* emitSegment({ kind: 'narration', text: decision.narration })
       }
 
       if (speaker === undefined) {
@@ -1341,6 +1374,7 @@ export class TavernWorkspaceService extends Service {
         scope: 'observable',
       })
       segments.push({ kind: 'speech', name: card.name, text: speech })
+      yield* emitSegment({ kind: 'speech', name: card.name, text: speech })
       spoken.push(speaker)
       lastSpeech = { name: card.name, text: speech }
     }
@@ -1404,13 +1438,21 @@ export class TavernWorkspaceService extends Service {
     //
     // When a call was cut off, the truncation is the cause, not a broken
     // director block: saying both would point the reader at the wrong knob.
-    const rendered = renderBeatMarkdown(segments)
-    const body = rendered.length > 0
-      ? rendered
-      : truncatedBeat ? '' : EMPTY_BEAT_NOTICE
-    const notice = truncatedBeat ? TRUNCATED_NOTICE : ''
-    const text = [body, notice].filter(part => part.length > 0).join('\n\n')
-    yield* textReply(options, text.length > 0 ? text : EMPTY_BEAT_NOTICE, beatUsage)
+    if (!streaming) {
+      const text = truncatedBeat ? TRUNCATED_NOTICE : EMPTY_BEAT_NOTICE
+      yield* textReply(options, text, beatUsage)
+      return
+    }
+    // Everything the player already read is in `streamedText`; the closing block
+    // repeats it because the session stores the block, not the deltas.
+    if (truncatedBeat) {
+      streamedText = `${streamedText}\n\n${TRUNCATED_NOTICE}`
+      yield { type: 'text-delta', index: 0, text: `\n\n${TRUNCATED_NOTICE}` }
+    }
+    yield { type: 'block-end', index: 0, block: { type: 'text', text: streamedText } }
+    const usage = usageChunk(beatUsage)
+    if (usage !== undefined) yield usage
+    yield { type: 'finish', reason: { kind: 'stop' } }
   }
 
   /**
@@ -2903,11 +2945,32 @@ function addUsage(target: TokenUsage, usage: TokenUsage | undefined): void {
 }
 
 /**
+ * Build the usage chunk for a beat, when any bucket has a value.
+ *
+ * The agent loop records whatever usage chunk the stream carries, and the
+ * token-meter projection folds it into the session totals. A beat with nothing
+ * reported stays silent rather than claiming four zeros.
+ * @param usage - summed usage of every model call this beat made.
+ * @returns the chunk, or undefined when every bucket is zero.
+ */
+function usageChunk(usage: TokenUsage): StreamChunk | undefined {
+  if (usage.inputTokens <= 0 && usage.outputTokens <= 0
+    && (usage.cacheReadTokens ?? 0) <= 0 && (usage.cacheWriteTokens ?? 0) <= 0) return undefined
+  return {
+    type: 'usage',
+    usage: {
+      ...usage,
+      totalTokens: usage.inputTokens + usage.outputTokens
+        + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
+    },
+  }
+}
+
+/**
  * Build a single-text-block reply stream.
  *
- * Usage is forwarded as its own chunk before `finish`: the agent loop records
- * whatever usage chunk the stream carries, and the token-meter projection folds
- * it into the session totals.
+ * Used for replies that never streamed: an error notice, a refusal, or a beat
+ * whose every model call returned nothing.
  *
  * The text is emitted as one closed block, never as a token delta. DSH derives
  * output speed from the first token delta and the message settle time; this
@@ -2927,11 +2990,8 @@ export async function* textReply(
   usage?: TokenUsage,
 ): AsyncGenerator<StreamChunk> {  yield { type: 'block-start', index: 0, blockType: 'text' }
   yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-  if (usage !== undefined && (usage.inputTokens > 0 || usage.outputTokens > 0
-    || (usage.cacheReadTokens ?? 0) > 0 || (usage.cacheWriteTokens ?? 0) > 0)) {
-    yield { type: 'usage', usage: { ...usage, totalTokens: usage.inputTokens + usage.outputTokens
-      + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) } }
-  }
+  const chunk = usage === undefined ? undefined : usageChunk(usage)
+  if (chunk !== undefined) yield chunk
   yield { type: 'finish', reason: { kind: 'stop' } }
   void options
 }

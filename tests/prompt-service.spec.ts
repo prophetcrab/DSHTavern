@@ -614,6 +614,74 @@ describe('tavern request cleaning (B-lite)', () => {
     expect(JSON.stringify(first.messages)).toContain('我推开门。')
   })
 
+  it('streams each segment as it finishes instead of waiting for the whole beat', async () => {
+    const root = await temporaryRoot()
+    const directory = join(root, 'tavern')
+    await mkdir(directory, { recursive: true })
+    await ensureMarker(directory, 'test')
+    const card = await createCharacterCard(directory, { name: '极光' })
+    // First call answers as the director and names the card; every later call
+    // answers as that character.
+    let call = 0
+    const ctx = new Context()
+    ctx.provide('workspaceRegistry', fakeWorkspaceRegistry([{ id: 'w1', path: directory, title: 'test' }]) as never)
+    ctx.provide('llm', {
+      stream: () => {
+        call += 1
+        const index = call
+        return (async function* () {
+          yield {
+            type: 'text-delta',
+            text: index === 1
+              ? JSON.stringify({ narration: '风停了。', inner: '', nextSpeaker: card.id })
+              : '她抬头看了一眼。',
+          }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    } as never)
+    const fiber = ctx.plugin(TavernWorkspaceService as never) as unknown as PromiseLike<unknown> & {
+      dispose(): Promise<void>
+    }
+    await fiber
+    disposers.push(async () => { await fiber.dispose() })
+    const agent = {
+      session: { id: 's-stream', header: { cwd: directory, agentPreset: 'tavern-rp' } },
+      ctx: ctx.extend(),
+    }
+    await (ctx as unknown as { serial(event: string, payload: unknown): Promise<unknown> })
+      .serial('agent/created', { agent })
+
+    const player = markAgentLoopRequest({
+      provider: 'fake',
+      model: 'fake',
+      sessionId: 's-stream',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '我推开门。' }], source: { kind: 'user' } },
+      ],
+    })
+    const next = (): AsyncIterable<never> => (async function* () {})()
+    const reply = await (ctx as unknown as {
+      waterfall(event: string, payload: unknown, next: unknown): Promise<AsyncIterable<unknown>>
+    }).waterfall('llm/stream', player, next)
+    const deltas: string[] = []
+    let closed: string | undefined
+    for await (const chunk of reply) {
+      const record = chunk as { type?: string; text?: string; block?: { text?: string } }
+      if (record.type === 'text-delta') deltas.push(record.text ?? '')
+      if (record.type === 'block-end') closed = record.block?.text
+    }
+    // One delta per finished segment, narration first: the player can read the
+    // scene while the character call is still running.
+    expect(deltas.length).toBeGreaterThanOrEqual(2)
+    expect(deltas[0]).toContain('风停了')
+    expect(deltas.slice(1).join('')).toContain('她抬头看了一眼')
+    // The closing block repeats everything the deltas carried, because the
+    // session stores the block rather than the stream.
+    expect(closed).toContain('风停了')
+    expect(closed).toContain('她抬头看了一眼')
+  })
+
   it('leaves a hand-built auxiliary call alone instead of orchestrating it', async () => {
     const { ctx } = await tavernAgent()
     const options = {
