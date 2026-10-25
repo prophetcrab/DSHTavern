@@ -831,9 +831,8 @@ export declare function externalTriggerKind(options: GenerateOptions): string | 
 /**
  * Build a single-text-block reply stream.
  *
- * Usage is forwarded as its own chunk before `finish`: the agent loop records
- * whatever usage chunk the stream carries, and the token-meter projection folds
- * it into the session totals.
+ * Used for replies that never streamed: an error notice, a refusal, or a beat
+ * whose every model call returned nothing.
  *
  * The text is emitted as one closed block, never as a token delta. DSH derives
  * output speed from the first token delta and the message settle time; this
