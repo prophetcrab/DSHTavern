@@ -1,6 +1,6 @@
 {
   "name": "dshtavern",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Turn the DeepSeek Harness into a role-play tavern: mark a folder as a tavern, and every chat inside it gets a director who narrates and picks who speaks while each character answers from its own card in a separate call.",
   "license": "MIT",
   "author": "prophetcrab",
