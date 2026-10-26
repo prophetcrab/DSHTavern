@@ -2900,6 +2900,16 @@ export function externalTriggerKind(options: GenerateOptions): string | undefine
 }
 
 /**
+ * Source kinds the harness injects around every turn rather than a trigger.
+ *
+ * These sit after the message that actually woke the turn — a time snapshot and
+ * a skill catalogue arrive on every request — so treating one as the trigger
+ * made an opening turn read as an external prompt and get refused. They carry
+ * no authored content, so skipping them can never hide a real trigger.
+ */
+const AMBIENT_SOURCE_KINDS: ReadonlySet<string> = new Set(['runtime-context', 'time-context', 'skill-catalog'])
+
+/**
  * Source kind of the newest user message the player did not author.
  * @param options - the intercepted loop request.
  * @returns the kind, or `undefined` for an ordinary prompt.
@@ -2910,7 +2920,9 @@ function newestTriggerKind(options: GenerateOptions): string | undefined {
     if (message === undefined || message.role !== 'user') continue
     if (isRuntimeContextMessage(message) || hasSystemReminder(message)) continue
     const kind = messageSourceKind(message)
-    return kind === 'user' ? undefined : kind
+    if (kind === 'user') return undefined
+    if (kind !== undefined && AMBIENT_SOURCE_KINDS.has(kind)) continue
+    return kind
   }
   return undefined
 }

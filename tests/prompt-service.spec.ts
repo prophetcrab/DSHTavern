@@ -12,6 +12,7 @@ import {
   TavernWorkspaceService,
   ensureMarker,
   externalTriggerKind,
+  isOpeningRequest,
   lastUserText,
 } from '../src/index.ts'
 import type { TavernWorkspaceRecord } from '../src/index.ts'
@@ -749,6 +750,41 @@ describe('tavern request cleaning (B-lite)', () => {
       messages: [{ role: 'user', content: [{ type: 'text', text: '（重新生成上一幕）' }], source: { kind: 'tavern-regenerate' } }],
     }
     expect(externalTriggerKind(regenerate as never)).toBeUndefined()
+  })
+
+  it('reads the opening trigger past the ambient context the harness appends', () => {
+    // Every turn carries a runtime snapshot, a time sample, and a skill
+    // catalogue after the message that woke it. Taking the newest of those as
+    // the trigger made a real opening turn look external and get refused.
+    const opening = {
+      provider: 'fake',
+      model: 'fake',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '（开场）' }], source: { kind: 'tavern-opening' } },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier ones.' }],
+          source: { kind: 'runtime-context' },
+        },
+        { role: 'user', content: [{ type: 'text', text: '<system-reminder>skills</system-reminder>' }], source: { kind: 'skill-catalog' } },
+        { role: 'user', content: [{ type: 'text', text: 'Time sampled while preparing turn 1.' }], source: { kind: 'time-context' } },
+      ],
+    }
+    expect(externalTriggerKind(opening as never)).toBeUndefined()
+    expect(isOpeningRequest(opening as never)).toBe(true)
+  })
+
+  it('still flags a real trigger that follows ambient context', () => {
+    const scheduled = {
+      provider: 'fake',
+      model: 'fake',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '我推开门。' }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: 'Time sampled.' }], source: { kind: 'time-context' } },
+        { role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER BATCH]' }], source: { kind: 'schedule' } },
+      ],
+    }
+    expect(externalTriggerKind(scheduled as never)).toBe('schedule')
   })
 
   it('leaves non-tavern sessions untouched', async () => {
