@@ -19,13 +19,14 @@
 | `dshtavern` | 酒馆本体：工作区标记、提示词装配、模型调用拦截与编排、HTTP 路由 |
 | `dshtavern/stats` | 用量统计：工作区与会话的 token、上下文占用、缓存命中率 |
 | `dshtavern/tracker` | 剧情回顾：后台按计划把剧情重述成摘要，已回顾的轮次在导轨标绿 |
+| `dshtavern/image` | 生图：场景插画与角色立绘，先编辑/细化/批准提示词，再手动调用第三方 API |
 | `tavern-rp` / `tavern-novel` | 内部 Agent 预设，按工作区模式自动绑定，不出现在全局预设名单 |
 
 后两个组件各自占一个插件行，删掉对应行即整体下线：路由消失、工具箱入口报告不可用，酒馆本体不受影响。内部预设也各占一行（`dshtavern/preset-rp` / `dshtavern/preset-novel`），这样插件列表里能分别显示自己的名字与说明。
 
 ## 工具箱
 
-酒馆会话里有一个可拖动的悬浮工具箱图标，包含六个可用面板（「设置」入口有意置灰）：
+酒馆会话里有一个可拖动的悬浮工具箱图标，包含八个可用面板：
 
 | 面板 | 内容 |
 |---|---|
@@ -33,8 +34,12 @@
 | Agent 编排 | 这一幕 / 上下文 / 模型 / 回复长度四个子页：每幕发言上限、上下文预算（四档一键预设，最大按 1M 窗口标定）、玩家点名优先、导演与角色各自的模型、统一/逐角色回复长度、推理预留 |
 | 角色卡 | 角色卡 CRUD，导入/导出单文件 `.charc`；新会话会先由模型生成一段完整开场（场景 + 角色开口） |
 | 世界书 | 工作区级条目编辑与触发预览，整本导入/导出 `.world` |
+| 玩家人设 | 工作区级人设库；角色提示词里的「玩家人设」块可指定具体人设 |
 | 用量统计 | 工作区/会话 token、输入输出拆分、上下文占用、缓存命中率 |
 | 剧情回顾 | 最新回顾 / 历史记录 / 设置三个子页；见下 |
+| 生图 | 场景 / 图库 / 设置三个子页；场景插画与角色立绘，提示词工作台见下 |
+
+**生图**是可选功能：子插件默认加载，但每个酒馆的 `image.json` 默认关闭。开启后，场景插画从最新回合的旁白、公开场景和出场角色生成草稿；角色立绘从角色卡的外观/描述生成。流程固定为「编辑草稿 →（可选）LLM 细化 → 批准提示词 → 手动生成」：细化只调用一次模型，不生图；批准由宿主签发 10 分钟有效的一次性 `approvalId`；只有点「生成图片」才会调用第三方 API。第一版接入 GPT Image（OpenAI 兼容）和即梦 4.0（火山引擎 AK/SK 异步）。密钥保存在 DSH 凭据里，工作区配置不写密钥；行被禁用时工具箱显示灰色「生图（未启用）」。
 
 **剧情回顾**在后台独立运行，不占用当前回合的模型调用。每次运行都从开场读到目标轮次的**完整剧情**，重写成一份当前状态摘要：
 
@@ -55,6 +60,7 @@
     tavern.json              # 标记：schema / mode / title / tavernId / createdAt
     worldbook.json           # 工作区级世界书
     agent.json               # Agent 编排设置（缺失即用默认值）
+    image.json               # 生图设置（provider / 模板 / 开关；不含密钥）
     state/last-request.json  # 被拦截的 loop 请求（只有工作区提示词）
     stories/<session>/
       opening.json           # 生成的开场脚本（含当时的 prompt 与模型）
@@ -62,11 +68,14 @@
       world.json             # 导演私有：场景 / 事实 / 未揭示剧情
       beats/<timestamp>.json # 每次 beat 的完整证据（含回退所需的舞台长度与世界快照）
       regenerations.json     # 被重新生成取代的回合 → 替代回合
+      images/<id>.png        # 场景图原图（jpg / webp 同目录）
+      images/index.jsonl     # 场景图元数据：回合 / 最终提示词 / provider
     tracker/
       config.json            # 回顾设置（触发方式 / 间隔 / 篇幅预算）
       state.<session>.json   # 该聊天上次回顾到第几轮
       summaries/<session>/   # 每次回顾一份，文件名是它覆盖到的轮次
   characters/<id>.charc      # 角色卡
+  characters/<id>/portraits/ # 角色立绘 + index.json（activeId）
   prompts/prompt.json        # 角色提示词编排
   prompts/director.json      # 导演提示词编排
 ```
@@ -93,7 +102,7 @@
 ```sh
 pnpm install
 pnpm build      # 宿主 tsc + 浏览器半 tsdown
-pnpm test       # 411 项，全离线
+pnpm test       # 434 项，全离线
 pnpm typecheck
 ```
 
@@ -135,7 +144,7 @@ npx @deepseek-ai/dsh web
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add \
-  https://raw.githubusercontent.com/prophetcrab/DSHTavern/master/dist/dshtavern-0.1.0.tgz
+  https://raw.githubusercontent.com/prophetcrab/DSHTavern/master/dist/dshtavern-0.3.0.tgz
 ```
 
 同样不需要构建。改动插件后重新生成这两者：
@@ -277,6 +286,8 @@ error: profile "desktop" is managed exclusively by the Electron application
 ## 已知限制
 
 - **小说模式**：能创建工作区并绑定 `tavern-novel`，但提示词块与编排尚未实现，发消息不会有回复。
+- **生图第一版**：只接入 GPT Image 与即梦 4.0；ComfyUI、Gemini banana、图生图和自动生图尚未实现。
+- **聊天头像**：按角色名映射 active 立绘，重名角色第一版不贴头像；头像依赖 DSH 气泡 DOM 结构，上游改结构时会静默不显示。
 - **角色卡格式**：只认原生 `.charc`，SillyTavern 的 PNG / V2 JSON 卡需先转换。
 - **只能重生成最新一幕**：更早的回合要连同其后所有回合一起回退，而只追加的转写无法表达。
 - **缓存命中率偏低**：导演与角色提示词里，会变化的世界状态和舞台记录紧接在静态前缀之后，缓存只能复用到断点。这是当前提示词结构的直接结果。

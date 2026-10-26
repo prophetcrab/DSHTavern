@@ -6,6 +6,17 @@ export interface TavernWorkspaceRef {
     readonly workspacePath: string;
     readonly workspaceTitle: string;
 }
+/** One Workspace row from the client Workspace projection. */
+export interface WorkspaceMembershipView {
+    readonly workspaceId: string;
+    readonly path: string;
+    readonly title: string;
+    readonly sessionIds: readonly string[];
+}
+/** Selector hook over the Workspace projection; supplied by the session slot. */
+export type WorkspaceSelector = (selector: (state: {
+    readonly items: readonly WorkspaceMembershipView[];
+}) => unknown) => unknown;
 /** The station (session) currently published by the composer detector. */
 export interface TavernToolboxStation {
     readonly sessionId: string;
@@ -14,7 +25,7 @@ export interface TavernToolboxStation {
     readonly workspaceTitle: string;
 }
 /** Tool identities shown by the toolbox. */
-export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'persona' | 'worldbooks' | 'usage' | 'tracker';
+export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'persona' | 'worldbooks' | 'usage' | 'tracker' | 'image';
 /** Launcher position in viewport pixels (top-left corner). */
 export interface FabPosition {
     readonly left: number;
@@ -45,6 +56,20 @@ export declare function ensureTaverns(force?: boolean): void;
  * @returns the tavern whose directory is the cwd, or `null`.
  */
 export declare function matchTavernWorkspace(cwd: string | undefined, taverns: readonly TavernWorkspaceRef[]): TavernWorkspaceRef | null;
+/**
+ * Match a session to a tavern by cwd, falling back to its Workspace membership.
+ *
+ * A freshly created blank Session is catalogued with its Workspace id before
+ * the client has a cwd summary for it. The cwd-only match then leaves the
+ * toolbox and pre-chat card unmounted even though the session is already in a
+ * registered tavern. Workspace membership is the authoritative fact in that
+ * window; cwd remains the precise check once it arrives.
+ * @param cwd - session working directory, when known.
+ * @param taverns - registered tavern workspaces.
+ * @param workspaceId - Workspace accounting for the session, when known.
+ * @returns the tavern, or `null`.
+ */
+export declare function matchTavernWorkspaceForSession(cwd: string | undefined, taverns: readonly TavernWorkspaceRef[], workspaceId: string | undefined): TavernWorkspaceRef | null;
 /**
  * Keep the launcher fully inside the viewport.
  * @param position - wanted top-left corner.
@@ -86,6 +111,8 @@ export interface ToolboxDetectorProps {
             cwd?: string;
         }>;
     }) => unknown) => unknown;
+    /** Workspace membership, used when a blank session has no cwd summary yet. */
+    readonly useWorkspaces?: WorkspaceSelector;
     /**
      * The session's public composer actions.
      *
@@ -102,7 +129,7 @@ export interface ToolboxDetectorProps {
  * @param props - session id and the session-list selector hook.
  * @returns `null` (the row renders nothing).
  */
-export declare function TavernToolboxDetector(props: ToolboxDetectorProps): null;
+export declare function TavernToolboxDetector(props: ToolboxDetectorProps): ReactElement | null;
 /**
  * Popover size for the registered tool count.
  *

@@ -22,6 +22,13 @@
 - insert:
     - id: dshtavern-tracker
       name: 'dshtavern/tracker'
+# Image generation is a separate row too. It is enabled by default, but every
+# tavern still has to opt in through its own `.dshtavern/image.json`; the row
+# never generates anything by itself. Disable this row to remove
+# `/tavern-image/*` and leave the toolbox tile greyed out.
+- insert:
+    - id: dshtavern-image
+      name: 'dshtavern/image'
 # The two tavern presets. They mount no prompt rows: host assembly is the sole
 # system-prompt source, and the presets give tavern sessions a clean scope
 # without tools or persona. They are hidden from the global preset roster and

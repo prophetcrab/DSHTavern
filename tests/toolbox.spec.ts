@@ -8,6 +8,7 @@ import {
   defaultFabPosition,
   launcherGestureMoved,
   matchTavernWorkspace,
+  matchTavernWorkspaceForSession,
   publishStation,
   readToolboxState,
   setActiveTool,
@@ -228,5 +229,15 @@ describe('toolbox store', () => {
     expect(readToolboxState().station).toBeNull()
     expect(readToolboxState().activeTool).toBeNull()
     expect(readToolboxState().open).toBe(false)
+  })
+})
+
+
+describe('session workspace fallback', () => {
+  it('uses Workspace membership while a blank session has no cwd', () => {
+    const tavern = { workspaceId: 'w1', workspacePath: '/taverns/one', workspaceTitle: 'one' }
+    expect(matchTavernWorkspaceForSession(undefined, [tavern], 'w1')).toEqual(tavern)
+    expect(matchTavernWorkspaceForSession('/elsewhere', [tavern], 'w1')).toEqual(tavern)
+    expect(matchTavernWorkspaceForSession(undefined, [tavern], 'w2')).toBeNull()
   })
 })

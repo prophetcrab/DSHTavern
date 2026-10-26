@@ -20,6 +20,7 @@
     "src/session.ts",
     "src/stats/index.ts",
     "src/tracker/index.ts",
+    "src/image/index.ts",
     "src/preset/rp.ts",
     "src/preset/novel.ts"
   ]

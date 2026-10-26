@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH-Tavern · Image Generation",
+    "description": "Illustrations for a tavern: scene art and character portraits. You edit the prompt, optionally let a model refine it, and only an approved prompt reaches a third-party image API. GPT Image and Jimeng 4.0 are supported; keys live in DSH credentials, never in the tavern directory. Every tavern starts with the feature switched off."
+  }
+}

@@ -4,6 +4,7 @@ export interface CharacterCardView {
     readonly id: string;
     readonly name: string;
     readonly description: string;
+    readonly appearance: string;
     readonly personality: string;
     readonly scenario: string;
     readonly systemPrompt: string;

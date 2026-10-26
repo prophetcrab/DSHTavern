@@ -32,6 +32,7 @@
 | D003 | [插件形态：单包 + 插件树](decisions/D003-plugin-tree.md) | 已定 |
 | D004 | [工作区标记](decisions/D004-workspace-marker.md) | 已定 |
 | D005 | [提示词装配：工作区级固定装配](decisions/D005-workspace-prompt-assembly.md) | 已定 |
+| D006 | [生图：可选子插件、手动审批与方言适配](decisions/D006-image-generation.md) | 已定 |
 
 ### 设计
 
@@ -42,6 +43,7 @@
 | 03 | [上下文与角色卡](design/03-context.md) | 草案 v0.1（待讨论） |
 | 04 | [酒馆外壳：调整面板与工具箱](design/04-shell.md) | 草案 v0.2（工具箱首版已落地） |
 | 05 | [提示词编排](design/05-prompt-orchestration.md) | 草案 v0.3（A 路线装配已实现） |
+| 06 | [生图](design/06-image-generation.md) | 草案 v0.1（Phase 1 已实现） |
 
 ## 阅读顺序
 

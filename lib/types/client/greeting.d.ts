@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import type { WorkspaceSelector } from './toolbox.js';
 /** Props the session-scoped dock slot supplies. */
 export interface GreetingDockProps {
     /** The session this card belongs to. */
@@ -12,6 +13,8 @@ export interface GreetingDockProps {
             cwd?: string;
         }>;
     }) => unknown) => unknown;
+    /** Workspace membership, used when a blank session has no cwd summary yet. */
+    readonly useWorkspaces?: WorkspaceSelector;
 }
 /**
  * Show the scene and first line above the composer while the chat is blank.

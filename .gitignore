@@ -5,6 +5,7 @@ node_modules/
 # Local scratch scripts and captured session dumps.
 .tmp-*
 *.log
+.zcode/
 
 # `lib/` is committed on purpose: DSH installs a plugin straight from a Git
 # repository, and it does not build one. Shipping the compiled output is what

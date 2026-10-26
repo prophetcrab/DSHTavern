@@ -22,8 +22,9 @@ import { CLASS, PANEL_CSS } from './styles.js'
 import { installTavernWorkspaceMarks } from './marks.js'
 import { TavernGreetingDock } from './greeting.js'
 import { TavernTurnActions } from './regenerate.js'
+import { TavernTurnImage } from './turn-image.js'
 import { installTavernBeatRecords } from './beat-record.js'
-import { TavernToolboxDetector, TavernToolboxOverlay } from './toolbox.js'
+import { TavernToolboxDetector } from './toolbox.js'
 
 /** The id shared by the sidebar entry and the main panel it opens. */
 export const PANEL_ID = 'tavern' as MainPanelId
@@ -449,9 +450,11 @@ export function apply(ctx: Context): void {
     order: 0,
     label: '酒馆',
   }, TavernIcon))
-  // The toolbox belongs to a tavern *session*: an invisible composer row
-  // publishes that station, and the frame overlay draws the draggable
-  // launcher, its icon popover, and each tool's sub-window.
+  // The toolbox belongs to a tavern *session*: the composer-left detector
+  // publishes that station and renders the fixed launcher, its popover, and
+  // each tool's sub-window. Rendering from the mounted session row (rather
+  // than shell.overlay) keeps the toolbox present in the blank New Session
+  // hero, where the shell overlay seat is not mounted.
   const composerLeftSlot = 'conversation.input.left' as never
   ctx.slots.inject(composerLeftSlot, () => ctx.slots.register({
     name: composerLeftSlot,
@@ -459,12 +462,6 @@ export function apply(ctx: Context): void {
     order: -5,
     label: '酒馆工具箱',
   } as never, TavernToolboxDetector as never))
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay',
-    id: 'tavern-toolbox-drawer',
-    order: 20,
-    label: '酒馆工具箱',
-  }, TavernToolboxOverlay as never))
   // The opening line a blank tavern chat shows above its composer. It is a
   // session-scoped dock entry so it appears only inside a real chat, and it
   // renders nothing once the player has spoken.
@@ -485,6 +482,14 @@ export function apply(ctx: Context): void {
     order: 0,
     label: '酒馆重新生成',
   } as never, TavernTurnActions as never))
+  // Scene images and the per-turn prompt workshop sit beside regeneration;
+  // both are sidecar state, never part of the assistant message.
+  ctx.slots.inject(turnTail, () => ctx.slots.register({
+    name: turnTail,
+    id: 'tavern-image',
+    order: -1,
+    label: '酒馆生图',
+  } as never, TavernTurnImage as never))
   // Mark tavern workspaces in the sidebar list. The sidebar exposes no slot for
   // a workspace row, so this observes the rendered rows instead.
   ctx.effect(() => installTavernWorkspaceMarks(), 'dshtavern: sidebar workspace marks')

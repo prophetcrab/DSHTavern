@@ -70,9 +70,9 @@ console.log(`\ntavern: ${tavern.title} (${tavern.workspaceId})\npath: ${tavern.p
 const character = await get(`/tavern/prompt?workspaceId=${id}&scope=character`)
 check('GET character layout ok', character.status === 200 && character.payload.ok === true, `status ${character.status}`)
 const characterBlocks = character.payload.blocks ?? []
-check('character layout exposes 15 blocks', characterBlocks.length === 15, `got ${characterBlocks.length}`)
+check('character layout exposes 13 blocks', characterBlocks.length === 13, `got ${characterBlocks.length}`)
 check('character layout ids are unique', new Set(characterBlocks.map(b => b.id)).size === characterBlocks.length)
-for (const added of ['lore-tail', 'character-stage', 'character-duty']) {
+for (const added of ['worldbook', 'character-stage', 'character-duty']) {
   check(`character layout gained '${added}'`, characterBlocks.some(b => b.id === added))
   const block = characterBlocks.find(b => b.id === added)
   check(`'${added}' is enabled by migration`, block?.enabled === true)
@@ -164,6 +164,14 @@ check('GET /tavern-stats/state ok', stats.status === 200 && stats.payload.ok ===
 check('stats reports the schema', stats.payload.schema === 1)
 check('stats reports projection availability', typeof stats.payload.projectionsAvailable === 'boolean')
 check('stats totals are numeric', typeof stats.payload.totals?.totalTokens === 'number')
+
+// --- image generation -------------------------------------------------------
+const imagePing = await get('/tavern-image/ping')
+check('GET /tavern-image/ping ok', imagePing.status === 200 && imagePing.payload.ok === true, `status ${imagePing.status}`)
+const imageConfig = await get(`/tavern-image/config?workspaceId=${id}`)
+check('GET /tavern-image/config ok', imageConfig.status === 200 && imageConfig.payload.ok === true,
+  `status ${imageConfig.status}`)
+check('image generation is off by default', imageConfig.payload.config?.enabled === false)
 
 // --- error paths -------------------------------------------------------------
 const crossSite = await get(`/tavern/state`, { 'sec-fetch-site': 'cross-site' })

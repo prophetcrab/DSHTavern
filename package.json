@@ -47,6 +47,10 @@
       "types": "./lib/types/tracker/index.d.ts",
       "default": "./lib/tracker/index.js"
     },
+    "./image": {
+      "types": "./lib/types/image/index.d.ts",
+      "default": "./lib/image/index.js"
+    },
     "./preset-rp": {
       "types": "./lib/types/preset/rp.d.ts",
       "default": "./lib/preset/rp.js"
@@ -58,6 +62,7 @@
     "./locale/*.json": "./locale/*.json",
     "./stats/locale/*.json": "./locale-stats/*.json",
     "./tracker/locale/*.json": "./locale-tracker/*.json",
+    "./image/locale/*.json": "./locale-image/*.json",
     "./preset-rp/locale/*.json": "./locale-preset-rp/*.json",
     "./preset-novel/locale/*.json": "./locale-preset-novel/*.json",
     "./package.json": "./package.json"
@@ -67,6 +72,7 @@
     "locale",
     "locale-stats",
     "locale-tracker",
+    "locale-image",
     "locale-preset-rp",
     "locale-preset-novel",
     "cordis.patch.yml",

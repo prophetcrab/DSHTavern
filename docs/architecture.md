@@ -1,7 +1,7 @@
 # DSH-Tavern 架构与进度
 
 > 本文是这个插件项目的唯一架构与进度说明，每次改动同步更新。
-> 最后更新：2026-10-22 ｜ 插件版本：0.1.0 ｜ 依赖 dsh `>=0.2.1-rc.2 <0.3.0`
+> 最后更新：2026-10-26 ｜ 插件版本：0.3.0 ｜ 依赖 dsh `>=0.2.1-rc.2 <0.3.0`
 
 ## 一、它是什么
 
@@ -25,7 +25,7 @@
 | `dsh.client.platform` | `web` | 浏览器半运行平台 |
 | `dsh.client.inject` | layout、sidebar | 注入依赖的客户端 UI 包 |
 
-`cordis.patch.yml` 插入 5 行：`dshtavern` 本体、`dshtavern-stats` 与 `dshtavern-tracker` 两个子插件，以及 `preset-tavern-rp`、`preset-tavern-novel` 两个内部 preset。两个 preset 都从全局 preset 名单中隐藏，由宿主按工作区 `mode` 自动绑定。
+`cordis.patch.yml` 插入 6 行：`dshtavern` 本体、`dshtavern-stats` / `dshtavern-tracker` / `dshtavern-image` 三个子插件，以及 `preset-tavern-rp`、`preset-tavern-novel` 两个内部 preset。生图子插件默认加载，但每个酒馆的 `image.json` 默认关闭；禁用该行会移除 `/tavern-image/*`，工具箱显示灰色「生图（未启用）」。两个 preset 都从全局 preset 名单中隐藏，由宿主按工作区 `mode` 自动绑定。
 
 插件列表里的名称与说明来自 `<specifier>/locale/en.json` 的 `meta.title` / `meta.description`，所以这两个 preset 行指向本包的 `dshtavern/preset-rp` / `dshtavern/preset-novel` 子路径（内容只是转出上游 `@deepseek-ai/dsh-agent-preset`），否则两行会因为共用上游 specifier 而显示同一个名字。
 
@@ -41,7 +41,7 @@
 |---|---|
 | `src/index.ts` | `TavernWorkspaceService`（服务名 `tavernWorkspaces`，注入 `workspaceRegistry`、`llm`）：标记 CRUD、路由注册、preset 绑定、请求拦截与编排入口 |
 | `src/orchestrator.ts` | 一次 beat 的编排：导演提示词、角色提示词、导演回复解析、beat 渲染 |
-| `src/prompt-layout.ts` | 角色 15 块 / 导演 8 块目录，顺序与启停的持久化、占位符替换 |
+| `src/prompt-layout.ts` | 角色 13 块 / 导演 8 块目录，顺序与启停的持久化、占位符替换 |
 | `src/worldbook.ts` | 世界书条目的匹配与预算裁剪 |
 | `src/stage.ts` | 舞台（append-only）与导演私有的世界状态 |
 | `src/character-card.ts` | 角色卡 schema 与文件读写 |
@@ -49,6 +49,7 @@
 | `src/http.ts` | loopback 校验与 JSON 响应 |
 | `src/stats/index.ts` | 子插件 `dshtavern-stats`：用量聚合与 `/tavern-stats/*` 路由 |
 | `src/tracker/` | 子插件 `dshtavern-tracker`：剧情回顾的调度、提示词、摘要存储与 `/tavern-tracker/*` 路由 |
+| `src/image/` | 子插件 `dshtavern-image`：生图配置/凭据/审批/提示词/图片存储、GPT Image 与即梦适配器、`/tavern-image/*` 路由 |
 | `src/preset/rp.ts`、`src/preset/novel.ts` | 两个内部 preset 的入口，只转出上游 preset 插件；存在的理由是让每一行有自己的 locale 名称 |
 | `src/session.ts` | 备选的 preset 行实现，**当前 profile 未挂载**（见「未完成」） |
 
@@ -56,13 +57,16 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/client/index.ts` | 面板注册：`main`、`sidebar.panellist`、`conversation.input.left`、`shell.overlay`；酒馆列表与新建 |
-| `src/client/toolbox.ts` | 悬浮启动器、图标浮层、子窗口容器；每 15 秒刷新酒馆列表 |
+| `src/client/index.ts` | 面板注册：`main`、`sidebar.panellist`、`conversation.input.left`、`conversation.input.dock`、`turnTail`；酒馆列表与新建 |
+| `src/client/toolbox.ts` | 悬浮启动器、图标浮层、子窗口容器；由 `conversation.input.left` 探测器直接渲染，空白 New Session Hero 也有入口；每 15 秒刷新酒馆列表 |
 | `src/client/reply-to.ts` | 点气泡里的角色名 → 把「对角色名说：」预填进输入框，让下一句直接对这个人说 |
 | `src/client/characters.ts` | 角色卡列表与编辑表单 |
 | `src/client/worldbook.ts` | 世界书条目编辑与触发预览 |
 | `src/client/prompt.ts` | 提示词编排：角色/导演切换、拖拽排序、启停、编辑、预览、恢复默认 |
 | `src/client/stats.ts` | 用量面板：工作区/会话 token、上下文占用、缓存命中率 |
+| `src/client/image.ts` | 生图面板、提示词工作台、角色立绘区 |
+| `src/client/turn-image.ts` | 回合下方场景图与「画一张」入口 |
+| `src/client/avatars.ts` | 按 active 立绘装饰聊天气泡头像 |
 | `src/client/styles.ts` | 面板、工具箱、故事文本（对白/旁白）样式 |
 
 ## 四、数据布局
@@ -80,7 +84,10 @@
       stage.jsonl            # 舞台，append-only，每行一条 narration/speech
       world.json             # 导演私有：scene / facts / hidden
       beats/<timestamp>.json # 每次 beat 的完整证据（导演与角色提示词、回复、决策）
+      images/<id>.<png|jpg|webp> # 场景图原图
+      images/index.jsonl     # 场景图元数据
   characters/<id>.charc      # 角色卡，一卡一文件
+  characters/<id>/portraits/ # 角色立绘与 active 索引
   prompts/prompt.json        # 角色提示词编排
   prompts/director.json      # 导演提示词编排
 ```
@@ -118,6 +125,17 @@
 | `/tavern/preview` | GET | 不调用模型的提示词预览 |
 | `/tavern-stats/ping` | GET | 子插件存活探测（客户端据此判断是否启用） |
 | `/tavern-stats/state` | GET | 用量快照：`?workspaceId=`、可选 `?sessionId=` |
+| `/tavern-image/ping` | GET | 生图子插件存活探测 |
+| `/tavern-image/config` | GET/POST | 生图设置、凭据状态、会话模型 |
+| `/tavern-image/credentials` | POST/DELETE | 按 provider 写/清固定凭据 |
+| `/tavern-image/preview` | GET | 场景/立绘上下文与草稿 |
+| `/tavern-image/refine` | POST | 一次 LLM 细化，不生图 |
+| `/tavern-image/approve` | POST | 审批提示词，返回一次性 `approvalId` |
+| `/tavern-image/generate` | POST | 按 `approvalId` 调用 provider |
+| `/tavern-image/list` | GET | 场景图列表 |
+| `/tavern-image/portraits` | GET | 立绘历史 / 聊天头像映射 |
+| `/tavern-image/portrait-active` | POST | 切换 active 立绘 |
+| `/tavern-image/file` | GET | 二进制图片 |
 | `/tavern/debug/presets` | GET | **临时**：查看 preset 组合，用于诊断 |
 
 ## 七、用量统计子插件
@@ -163,6 +181,18 @@
 
 **轮次导航绿标**：轨迹导航没有可插槽位，客户端观察 `button[data-index]` 的 `aria-label` 取轮次号，对已追踪的轮次打 `data-dshtavern-tracked` 属性，样式表把它染绿。因为导轨是虚拟滚动的，`MutationObserver` 在滚动重建后重新上色；30 秒轮询一次追踪状态。没有装追踪子插件时路由不存在，导轨保持原样。
 
+## 七之三、生图子插件
+
+`dshtavern-image` 是独立的插件行（`name: 'dshtavern/image'`），默认加载，但每个酒馆的 `.dshtavern/image.json` 默认 `enabled: false`。它不参与 beat：没有 `llm/stream` 钩子，也不会自动配图；唯一的第三方生图调用来自用户批准后点击「生成图片」。
+
+**提示词工作台**：草稿 → 用户编辑 →（可选）LLM 细化 → 用户批准 → 手动生成。审批由宿主签发一次性 `approvalId`（绑定 prompt/参数/provider/目标，10 分钟有效）；`generate` 只接受 `approvalId`，不接收客户端临时改写的 prompt。细化默认跟随当前会话模型，也可在设置里单独配置；细化本身不生成图片。
+
+**中立层 + 方言适配器**：统一 `ImageRequest` / `ImageResult` 与能力表。第一版实现 GPT Image（同步 b64）和即梦 4.0（火山引擎 AK/SK，提交 `CVSync2AsyncSubmitTask` + 轮询 `CVSync2AsyncGetResult`，结果 URL 立即下载落盘）。ComfyUI 与 Gemini banana 留作后续适配器。
+
+**图片落盘**：场景图在 `stories/<session>/images/`，立绘在 `characters/<cardId>/portraits/`；都是侧车文件，不进 assistant 消息或模型历史。客户端用回合下方 `turnTail` 和角色卡面板展示；立绘 active 由 `portraits/index.json` 记录，聊天头像通过 DOM 装饰贴在台词气泡上。
+
+**密钥**：按 provider 固定引用（`DSHTAVERN_IMAGE_OPENAI_API_KEY`、`DSHTAVERN_IMAGE_JIMENG_ACCESS_KEY` / `SECRET_KEY`），面板只写不读。
+
 ## 八、开发进度
 
 已完成并实测：
@@ -176,7 +206,7 @@
 - Agent 编排面板：分「这一幕 / 上下文 / 模型 / 回复长度」四个子页，每页只放自己那一组旋钮。标签条固定，页面内容在下方独立滚动，一个设置很多的窗口不会变成一条长页面；切换子页保留未保存的改动，有改动的子页在标签上带一个圆点。设置项包括每幕发言上限、角色可见舞台行数、世界书扫描行数与预算、玩家输入上限、轮换发言、玩家点名优先、无法解析时是否让首位角色顶替、导演 / 角色各自的模型与推理等级，以及统一回复长度（含一键档位）、导演回复长度、逐角色回复长度与推理预留。设置存于 `<workspace>/.dshtavern/agent.json`，缺失时使用与旧常量完全一致的默认值。
 - 回复长度按「字」配置、按 token 下发：字数 × 0.6 换算成 `maxTokens`。因为 provider 的 `max_tokens` 同时约束思考与正文，默认再加 512 token 推理预留；实测在最高推理等级下，240 token 的纯正文上限会让模型把预算全花在思考上、正文返回 0 字，加上预留后同一预算恢复正常产出。任一调用触顶时该轮回复末尾追加截断提示。
 - 上下文预算按 1M token 窗口重新标定：舞台 4–20000 行、扫描 4–20000 行、世界书 1–200 条 / 200–600000 字、玩家输入 200–400000 字。五个一键预设 `精简 / 标准 / 充裕 / 极限 / 满窗口`。`满窗口` 是 8000 行舞台 + 30 万字世界书，按中文每字 0.6 token 估算峰值约 780k token，占 1M 窗口的 74%，余下 26% 留给系统提示词、角色卡与回复。`极限` 与 `满窗口` 都带「舞台字数上限」（40 万 / 80 万字），因为行数到这一量级后单行长度会让总字数不可预测，超出时从最旧记录开始丢弃。
-- 提示词编排：角色 15 块、导演 8 块；拖拽排序、启停、编辑、预览、恢复默认；只持久化与默认值的差异。卡片显示块的来源、字数与编辑入口，停用块以虚线边框和「已停用」标签区分；运行时填充的块标注「运行时」而非字数。预览面板的角色卡下拉直接读 `/tavern/characters`，打开即列出全部真实角色卡并默认选中第一张。
+- 提示词编排：角色 13 块、导演 8 块；拖拽排序、启停、编辑、预览、恢复默认；只持久化与默认值的差异。卡片显示块的来源、字数与编辑入口，停用块以虚线边框和「已停用」标签区分；运行时填充的块标注「运行时」而非字数。预览面板的角色卡下拉直接读 `/tavern/characters`，打开即列出全部真实角色卡并默认选中第一张。
 - 提示词的全部内容都由块产出：角色 system 的舞台记录、世界书「末尾」条目、角色职责，以及导演提示词里的导演世界书，各有独立块，可以单独停用；此前这几段是渲染后硬拼在块文本之外的，编排页看不到也关不掉。布局文件因此升到 schema 2，旧文件读取时按目录位置补齐新增块并保留作者原有顺序。
 - 角色扮演编排：导演决策 → 角色独立调用 → 分段渲染；实测多角色登场、线索按世界书逐层释放、跨轮舞台累积。
 - 导演 JSON 合规：输出格式块从目录位置抽出，**固定拼在 system 提示词最末**（`buildDirectorSystem` / `buildDirectorContinuation` 都如此）。依据是实测 33 个 beat / 67 个回合：首轮失败率 24%，后续轮只有 2.9%——差别就在后者恰好以重申输出契约结尾。格式文本也改为明确「第一个字符是 `{`，最后一个字符是 `}`」。另加一道修复调用：解析不出 JSON 且未被截断时，把原回复和格式要求再发一次，让模型把已有决定转写成 JSON（不重新决策，只有失败时才多这一次调用）。改后 6 个回合全部合规。
@@ -201,7 +231,7 @@
   - 重演期间舞台被原地追加（下一条 prompt 要读最新状态），落盘必须直接写这份数组，不能再拼一次 `staged`——否则每一行都会写两遍。
   - 客户端只在「最新已结束回合」且宿主报告它可重放时显示按钮；`GET /tavern/regenerate` 同时返回替换记录与 `replayableTurn`，开场刚结束、还没有 beat 的会话不会出现必然失败的按钮。
 - 用量统计子插件：工作区总量、当前会话用量、输入/输出拆分、上下文占用条、缓存命中率条、会话明细表；每 10 秒刷新。面板内容限宽 720px 居中，两卡两表双列自适应（窄窗降为单列并隐藏次要列）。实测面板数值与 DSH 自身状态栏一致（12.2k tokens、命中率 12.3%、上下文 1.05%）。
-- 测试与构建：`pnpm test` 380 项通过（25 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js`、`lib/tracker/index.js` 与浏览器 `lib/client.js`。
+- 测试与构建：`pnpm test` 434 项通过（32 个文件），`pnpm build` 产出宿主 `lib/*.js`、`lib/stats/index.js`、`lib/tracker/index.js`、`lib/image/index.js` 与浏览器 `lib/client.js`。
 
 ## 九、未完成与已知问题
 
@@ -210,7 +240,7 @@
 - **小说模式**：能创建工作区、绑定 `tavern-novel`，但宿主对非 `rp` 模式返回空 system prompt，编排器直接返回空回复。消息发出后界面显示「已完成」但没有任何内容，也没有提示。
 - **角色卡第三方格式**：只认原生 `.charc`。SillyTavern V2/V3（PNG `chara`/`ccv3` 块、V2 JSON）尚未支持，需要时得先转成原生格式。
 - **工具箱「设置」**：入口有意置灰。
-- **`src/session.ts`**：导出了 `./session` 子路径，但当前 `cordis.patch.yml` 的三个 preset 都是 `plugins: []`，该行未被挂载；提示词由宿主直接注册。
+- **`src/session.ts`**：导出了 `./session` 子路径，但当前 `cordis.patch.yml` 的两个 preset 都是 `plugins: []`，该行未被挂载；提示词由宿主直接注册。
 - **`/tavern/debug/presets`**、`session.ts` 的调试日志、部分 `TEMPORARY` 注释：诊断残留，未清理。
 
 **已知缺陷**
@@ -240,7 +270,7 @@
 
 ```sh
 pnpm install
-pnpm test        # 25 个文件、380 项，全离线
+pnpm test        # 32 个文件、434 项，全离线
 pnpm build       # 宿主 tsc + 浏览器 tsdown
 ```
 

@@ -25,6 +25,8 @@ export interface CharacterCard {
     readonly id: string;
     readonly name: string;
     readonly description: string;
+    /** Visual description used only by image prompts; empty means fall back to description. */
+    readonly appearance: string;
     readonly personality: string;
     readonly scenario: string;
     readonly systemPrompt: string;
@@ -42,6 +44,7 @@ export interface CharacterCard {
 export interface CharacterCardInput {
     readonly name?: unknown;
     readonly description?: unknown;
+    readonly appearance?: unknown;
     readonly personality?: unknown;
     readonly scenario?: unknown;
     readonly systemPrompt?: unknown;

@@ -84,8 +84,8 @@ describe('browser entry', () => {
       'main',
       'sidebar.panellist',
       'conversation.input.left',
-      'shell.overlay',
       'conversation.input.dock',
+      'conversation.chat.turnTail',
       'conversation.chat.turnTail',
     ])
     expect(entries[0]?.options.key).toBe(PANEL_ID)

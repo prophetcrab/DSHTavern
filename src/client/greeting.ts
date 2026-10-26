@@ -12,7 +12,13 @@
  */
 import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import { matchTavernWorkspace, subscribeToolboxState, readToolboxState, ensureTaverns } from './toolbox.js'
+import {
+  ensureTaverns,
+  matchTavernWorkspaceForSession,
+  readToolboxState,
+  subscribeToolboxState,
+} from './toolbox.js'
+import type { WorkspaceSelector } from './toolbox.js'
 
 /** One opening script segment as served by `/tavern/greeting?sessionId=`. */
 interface ScriptSegmentView {
@@ -37,6 +43,8 @@ export interface GreetingDockProps {
   readonly session: { readonly sessionId: string; readonly blank: boolean }
   /** Session-list selector supplying the working directory. */
   readonly useSessions: (selector: (state: { byId: Record<string, { cwd?: string }> }) => unknown) => unknown
+  /** Workspace membership, used when a blank session has no cwd summary yet. */
+  readonly useWorkspaces?: WorkspaceSelector
 }
 
 /**
@@ -125,6 +133,12 @@ async function requestOpeningTurn(workspaceId: string, sessionId: string): Promi
 export function TavernGreetingDock(props: GreetingDockProps): ReactElement | null {
   const summary = props.useSessions(list => list.byId[props.session.sessionId]) as { cwd?: string } | undefined
   const cwd = summary?.cwd
+  const sessionWorkspaceId = props.useWorkspaces?.((state) => {
+    for (const item of state.items) {
+      if (item.sessionIds.some(id => String(id) === props.session.sessionId)) return String(item.workspaceId)
+    }
+    return undefined
+  }) as string | undefined
   const [opening, setOpening] = useState<OpeningView | null>(null)
   const [loading, setLoading] = useState(false)
   const [station, setStation] = useState<{ workspaceId: string } | null>(null)
@@ -132,9 +146,9 @@ export function TavernGreetingDock(props: GreetingDockProps): ReactElement | nul
   // Track the tavern registry so a newly created workspace is recognized without
   // a reload, matching how the toolbox detector behaves.
   const syncStation = useCallback(() => {
-    const match = matchTavernWorkspace(cwd, readToolboxState().taverns)
+    const match = matchTavernWorkspaceForSession(cwd, readToolboxState().taverns, sessionWorkspaceId)
     setStation(match === null ? null : { workspaceId: match.workspaceId })
-  }, [cwd])
+  }, [cwd, sessionWorkspaceId])
 
   useEffect(() => {
     ensureTaverns()

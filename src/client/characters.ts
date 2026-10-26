@@ -4,12 +4,14 @@
  */
 import { createElement, useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
+import { TavernPortraitSection } from './image.js'
 
 /** One character card as served by `/tavern/characters`. */
 export interface CharacterCardView {
   readonly id: string
   readonly name: string
   readonly description: string
+  readonly appearance: string
   readonly personality: string
   readonly scenario: string
   readonly systemPrompt: string
@@ -50,6 +52,7 @@ interface CharacterDraft {
   readonly id: string | null
   readonly name: string
   readonly description: string
+  readonly appearance: string
   readonly personality: string
   readonly scenario: string
   readonly systemPrompt: string
@@ -63,6 +66,7 @@ const NEW_DRAFT: CharacterDraft = {
   id: null,
   name: '',
   description: '',
+  appearance: '',
   personality: '',
   scenario: '',
   systemPrompt: '',
@@ -124,6 +128,7 @@ async function writeCard(
       card: {
         name: draft.name,
         description: draft.description,
+        appearance: draft.appearance,
         personality: draft.personality,
         scenario: draft.scenario,
         systemPrompt: draft.systemPrompt,
@@ -235,6 +240,7 @@ function draftOf(card: CharacterCardView): CharacterDraft {
     id: card.id,
     name: card.name,
     description: card.description,
+    appearance: card.appearance,
     personality: card.personality,
     scenario: card.scenario,
     systemPrompt: card.systemPrompt,
@@ -480,14 +486,28 @@ export function CharacterCardTool(props: CharacterCardToolProps): ReactElement {
                   placeholder: '原创, 奇幻',
                   onChange: value => update({ tags: value }),
                 }))),
+            draft.id === null
+              ? null
+              : createElement(TavernPortraitSection, {
+                workspaceId: props.workspaceId,
+                cardId: draft.id,
+                cardName: draft.name || '未命名角色',
+              }),
             createElement('div', { className: 'dshtavern-character-group' },
               createElement('div', { className: 'dshtavern-character-group-title' }, '角色设定'),
               createElement(Field, {
                 label: '描述',
                 value: draft.description,
                 multiline: true,
-                placeholder: '外貌、身份、背景',
+                placeholder: '身份、背景',
                 onChange: value => update({ description: value }),
+              }),
+              createElement(Field, {
+                label: '外观（生图用）',
+                value: draft.appearance,
+                multiline: true,
+                placeholder: '发色、服装、体态等视觉特征；留空时回退到描述第一段',
+                onChange: value => update({ appearance: value }),
               }),
               createElement(Field, {
                 label: '性格',

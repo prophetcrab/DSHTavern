@@ -30,7 +30,7 @@ describe('pre-chat opening card', () => {
     // The card is not inside `.dshtavern-panel`, so a panel-only `--tv-scale`
     // would leave every calc() unresolved. The turn-tail regeneration row has
     // the same problem: it renders in the conversation, not in the panel.
-    expect(PANEL_CSS).toContain('.dshtavern-panel,\n.dshtavern-greeting,\n.dshtavern-regenerate-row {')
+    expect(PANEL_CSS).toContain('.dshtavern-panel,\n.dshtavern-greeting,\n.dshtavern-regenerate-row,\n.dshtavern-image-turn,\n.dshtavern-image-workshop {')
     expect(PANEL_CSS).toContain('--tv-scale: 1;')
   })
 

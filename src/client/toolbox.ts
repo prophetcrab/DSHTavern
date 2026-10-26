@@ -20,6 +20,8 @@ import { WorldbookWorkbench } from './worldbook.js'
 import { PersonaWorkbench } from './persona.js'
 import { UsagePanel } from './stats.js'
 import { TrackerPanel } from './tracker.js'
+import { TavernImagePanel, useImageAvailability } from './image.js'
+import { installTavernAvatars } from './avatars.js'
 import { installTrackedTurnMarks, refreshTrackedTurns } from './tracked-marks.js'
 import { installReplyTargets } from './reply-to.js'
 import type { InputActions } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -31,6 +33,19 @@ export interface TavernWorkspaceRef {
   readonly workspaceTitle: string
 }
 
+/** One Workspace row from the client Workspace projection. */
+export interface WorkspaceMembershipView {
+  readonly workspaceId: string
+  readonly path: string
+  readonly title: string
+  readonly sessionIds: readonly string[]
+}
+
+/** Selector hook over the Workspace projection; supplied by the session slot. */
+export type WorkspaceSelector = (
+  selector: (state: { readonly items: readonly WorkspaceMembershipView[] }) => unknown
+) => unknown
+
 /** The station (session) currently published by the composer detector. */
 export interface TavernToolboxStation {
   readonly sessionId: string
@@ -40,7 +55,7 @@ export interface TavernToolboxStation {
 }
 
 /** Tool identities shown by the toolbox. */
-export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'persona' | 'worldbooks' | 'usage' | 'tracker'
+export type TavernToolId = 'prompt' | 'agent' | 'characters' | 'persona' | 'worldbooks' | 'usage' | 'tracker' | 'image'
 
 /** Launcher position in viewport pixels (top-left corner). */
 export interface FabPosition {
@@ -141,6 +156,30 @@ export function matchTavernWorkspace(
     if (normalized === normalizeDirectory(tavern.workspacePath)) return tavern
   }
   return null
+}
+
+/**
+ * Match a session to a tavern by cwd, falling back to its Workspace membership.
+ *
+ * A freshly created blank Session is catalogued with its Workspace id before
+ * the client has a cwd summary for it. The cwd-only match then leaves the
+ * toolbox and pre-chat card unmounted even though the session is already in a
+ * registered tavern. Workspace membership is the authoritative fact in that
+ * window; cwd remains the precise check once it arrives.
+ * @param cwd - session working directory, when known.
+ * @param taverns - registered tavern workspaces.
+ * @param workspaceId - Workspace accounting for the session, when known.
+ * @returns the tavern, or `null`.
+ */
+export function matchTavernWorkspaceForSession(
+  cwd: string | undefined,
+  taverns: readonly TavernWorkspaceRef[],
+  workspaceId: string | undefined,
+): TavernWorkspaceRef | null {
+  const byCwd = matchTavernWorkspace(cwd, taverns)
+  if (byCwd !== null) return byCwd
+  if (workspaceId === undefined) return null
+  return taverns.find(tavern => tavern.workspaceId === workspaceId) ?? null
 }
 
 /** Normalise a directory for comparison (separators, trailing slash, case). */
@@ -253,6 +292,8 @@ export function subscribeToolboxState(listener: () => void): () => void {
 export interface ToolboxDetectorProps {
   readonly sessionId: string
   readonly useSessions: (selector: (state: { byId: Record<string, { cwd?: string }> }) => unknown) => unknown
+  /** Workspace membership, used when a blank session has no cwd summary yet. */
+  readonly useWorkspaces?: WorkspaceSelector
   /**
    * The session's public composer actions.
    *
@@ -270,10 +311,16 @@ export interface ToolboxDetectorProps {
  * @param props - session id and the session-list selector hook.
  * @returns `null` (the row renders nothing).
  */
-export function TavernToolboxDetector(props: ToolboxDetectorProps): null {
+export function TavernToolboxDetector(props: ToolboxDetectorProps): ReactElement | null {
   const toolbox = useSyncExternalStore(subscribe, snapshot, snapshot)
   const summary = props.useSessions(list => list.byId[props.sessionId]) as { cwd?: string } | undefined
   const cwd = summary?.cwd
+  const sessionWorkspaceId = props.useWorkspaces?.((state) => {
+    for (const item of state.items) {
+      if (item.sessionIds.some(id => String(id) === props.sessionId)) return String(item.workspaceId)
+    }
+    return undefined
+  }) as string | undefined
 
   useEffect(() => {
     ensureTaverns()
@@ -282,7 +329,7 @@ export function TavernToolboxDetector(props: ToolboxDetectorProps): null {
   }, [])
 
   useEffect(() => {
-    const match = matchTavernWorkspace(cwd, toolbox.taverns)
+    const match = matchTavernWorkspaceForSession(cwd, toolbox.taverns, sessionWorkspaceId)
     if (match === null) {
       publishStation(null)
       return
@@ -294,7 +341,7 @@ export function TavernToolboxDetector(props: ToolboxDetectorProps): null {
       workspaceTitle: match.workspaceTitle,
     })
     return () => publishStation(null)
-  }, [cwd, props.sessionId, toolbox.taverns])
+  }, [cwd, props.sessionId, sessionWorkspaceId, toolbox.taverns])
 
   // Mark the document while a tavern session is on screen. The story stylesheet
   // keys off this attribute, so narration and speech styling never reaches an
@@ -346,7 +393,19 @@ export function TavernToolboxDetector(props: ToolboxDetectorProps): null {
     return () => { stop() }
   }, [toolbox.station, props.inputActions])
 
-  return null
+  // Active portraits decorate speech bubbles. This is a DOM observer because
+  // DSH has no per-speaker avatar slot; it is scoped to the tavern story.
+  const avatarWorkspace = toolbox.station?.workspaceId ?? ''
+  useEffect(() => {
+    if (avatarWorkspace.length === 0) return
+    const stop = installTavernAvatars(avatarWorkspace)
+    return () => { stop() }
+  }, [avatarWorkspace])
+
+  // The detector is the only composer row guaranteed to be mounted in both a
+  // real chat and the blank New Session hero. Render the fixed toolbox here
+  // rather than relying on shell.overlay, which the hero view does not mount.
+  return toolbox.station === null ? null : createElement(TavernToolboxOverlay)
 }
 
 interface ToolEntry {
@@ -364,6 +423,7 @@ const TOOLS: readonly ToolEntry[] = [
   { id: 'usage', glyph: '量', label: '用量统计', enabled: true },
   { id: 'tracker', glyph: '追', label: '剧情回顾', enabled: true },
   { id: 'persona', glyph: '我', label: '玩家人设', enabled: true },
+  { id: 'image', glyph: '图', label: '生图', enabled: true },
 ]
 
 /** Launcher glyph: a toolbox outline, drawn as artwork. */
@@ -412,6 +472,7 @@ export function toolPopoverSize(): { width: number; height: number } {
 
 /** Icon popover anchored to the launcher. */
 function ToolboxPopover(position: FabPosition): ReactElement | null {
+  const imageAvailability = useImageAvailability()
   if (!state.open || state.station === null) return null
   const { width, height } = toolPopoverSize()
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth
@@ -425,17 +486,21 @@ function ToolboxPopover(position: FabPosition): ReactElement | null {
     'aria-label': '酒馆工具箱',
     style: { left, top },
   },
-  TOOLS.map(tool => createElement('button', {
-    key: tool.id,
-    type: 'button',
-    className: 'dshtavern-tool-launch',
-    title: tool.enabled ? tool.label : `${tool.label}（待实现）`,
-    'aria-label': tool.label,
-    disabled: !tool.enabled,
-    onClick: () => setActiveTool(tool.id),
-  },
-  createElement('span', { className: 'dshtavern-tool-launch-glyph', 'aria-hidden': true }, tool.glyph),
-  createElement('span', { className: 'dshtavern-tool-launch-label' }, tool.label))))
+  TOOLS.map(tool => {
+    const unavailable = tool.id === 'image' && imageAvailability === 'off'
+    const label = unavailable ? '生图（未启用）' : tool.label
+    return createElement('button', {
+      key: tool.id,
+      type: 'button',
+      className: `dshtavern-tool-launch${unavailable ? ' dshtavern-tool-launch-disabled' : ''}`,
+      title: unavailable ? '生图子插件未启用；到插件页启用 dshtavern-image' : tool.enabled ? tool.label : `${tool.label}（待实现）`,
+      'aria-label': label,
+      'aria-disabled': unavailable,
+      onClick: () => setActiveTool(tool.id),
+    },
+    createElement('span', { className: 'dshtavern-tool-launch-glyph', 'aria-hidden': true }, tool.glyph),
+    createElement('span', { className: 'dshtavern-tool-launch-label' }, label))
+  }))
 }
 
 /** Tool sub-window. */
@@ -515,7 +580,14 @@ function ToolWindow(): ReactElement | null {
                 workspacePath: station.workspacePath,
                 sessionId: station.sessionId,
               })
-              : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
+              : tool === 'image'
+                ? createElement(TavernImagePanel, {
+                  workspaceId: station.workspaceId,
+                  workspaceTitle: station.workspaceTitle,
+                  workspacePath: station.workspacePath,
+                  sessionId: station.sessionId,
+                })
+                : createElement('div', { style: { padding: 20 } }, '该工具尚未实现。'))))
 }
 
 /** How far the pointer must travel before a press becomes a drag. */

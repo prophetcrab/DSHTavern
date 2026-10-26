@@ -238,7 +238,7 @@ await post('/tavern/worldbook', { workspaceId: id, entries })
 // --- prompt layouts ----------------------------------------------------------
 const characterLayout = await get(`/tavern/prompt?workspaceId=${workspaceId}&scope=character`)
 const characterIds = (characterLayout.payload.blocks ?? []).map(block => block.id)
-check('fresh tavern starts from the catalogue default', characterIds.length === 15, `got ${characterIds.length}`)
+check('fresh tavern starts from the catalogue default', characterIds.length === 13, `got ${characterIds.length}`)
 
 const reversed = [...characterIds].reverse().map((blockId, index) => ({ id: blockId, enabled: index % 3 !== 0 }))
 const persisted = await post('/tavern/prompt', { workspaceId: id, scope: 'character', blocks: reversed })
@@ -264,7 +264,7 @@ check('block override is flagged', mainBlock?.overridden === true, String(mainBl
 
 const reset = await post('/tavern/prompt', { workspaceId: id, scope: 'character', reset: true })
 check('layout reset restores the catalogue order', reset.status === 200
-  && reset.payload.blocks?.length === 15
+  && reset.payload.blocks?.length === 13
   && reset.payload.blocks?.[0]?.id === 'main-template',
   `${reset.payload.blocks?.[0]?.id} / ${reset.payload.blocks?.length}`)
 check('reset dropped the text override', reset.payload.blocks?.[0]?.overridden === false)

@@ -17,6 +17,7 @@ const CARD_TEXT = JSON.stringify({
   id: 'a4f6540e-e289-4fd9-89e3-1653408cc286',
   name: '林见夏',
   description: '夜班售票员',
+  appearance: '',
   personality: '说话慢',
   scenario: '末班车',
   systemPrompt: '',

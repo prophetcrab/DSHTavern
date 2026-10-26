@@ -44,6 +44,8 @@ export interface CharacterCard {
   readonly id: string
   readonly name: string
   readonly description: string
+  /** Visual description used only by image prompts; empty means fall back to description. */
+  readonly appearance: string
   readonly personality: string
   readonly scenario: string
   readonly systemPrompt: string
@@ -62,6 +64,7 @@ export interface CharacterCard {
 export interface CharacterCardInput {
   readonly name?: unknown
   readonly description?: unknown
+  readonly appearance?: unknown
   readonly personality?: unknown
   readonly scenario?: unknown
   readonly systemPrompt?: unknown
@@ -178,6 +181,7 @@ export function buildCharacterCard(
     id,
     name: requiredName(input.name),
     description: optionalText(input.description, '描述', 64_000),
+    appearance: optionalText(input.appearance, '外观', 16_000),
     personality: optionalText(input.personality, '性格', 64_000),
     scenario: optionalText(input.scenario, '场景', 64_000),
     systemPrompt: optionalText(input.systemPrompt, '系统提示词', 64_000),
