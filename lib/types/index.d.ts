@@ -770,7 +770,6 @@ export declare class TavernWorkspaceService extends Service {
     /** Read or replace one tavern workspace's worldbook. */
     private handleWorldbook;
     /** TEMPORARY: report live agent-preset compositions for diagnosis. */
-    private handleDebugPresets;
     /** Answer one failed tavern request with the closest status category. */
     private fail;
 }

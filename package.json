@@ -1,6 +1,6 @@
 {
   "name": "dshtavern",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Turn the DeepSeek Harness into a role-play tavern: mark a folder as a tavern, and every chat inside it gets a director who narrates and picks who speaks while each character answers from its own card in a separate call.",
   "license": "MIT",
   "author": "prophetcrab",
@@ -34,10 +34,6 @@
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
-    },
-    "./session": {
-      "types": "./lib/types/session.d.ts",
-      "default": "./lib/session.js"
     },
     "./stats": {
       "types": "./lib/types/stats/index.d.ts",
@@ -76,7 +72,8 @@
     "locale-preset-rp",
     "locale-preset-novel",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "SECURITY.md"
   ],
   "dsh": {
     "bundle": {

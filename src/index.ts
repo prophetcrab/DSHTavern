@@ -1770,12 +1770,6 @@ export class TavernWorkspaceService extends Service {
         path: '/tavern/preview',
         handler: (req, res) => this.handlePreview(req, res),
       }), 'dshtavern: /tavern/preview')
-      // TEMPORARY diagnosis: inspect live preset compositions.
-      webCtx.effect(() => webCtx.webServer.register({
-        kind: 'exact',
-        path: '/tavern/debug/presets',
-        handler: (req, res) => this.handleDebugPresets(req, res),
-      }), 'dshtavern: /tavern/debug/presets')
     })
   }
 
@@ -2663,44 +2657,6 @@ export class TavernWorkspaceService extends Service {
   }
 
   /** TEMPORARY: report live agent-preset compositions for diagnosis. */
-  private async handleDebugPresets(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!allowLoopback(req, res)) return
-    if (req.method !== 'GET') {
-      methodNotAllowed(res, 'GET')
-      return
-    }
-    try {
-      const presets = (this.ctx as unknown as { get(name: string): unknown }).get('agentPresets') as
-        | {
-          inspectCompositions?: (ctx?: unknown) => unknown
-          list?: () => Promise<unknown>
-          remoteExportList?: () => Promise<unknown>
-        }
-        | undefined
-      if (presets === undefined) {
-        sendJson(res, 404, { ok: false, error: 'agentPresets is unavailable' })
-        return
-      }
-      const safe = async <T>(operation: () => T | Promise<T>): Promise<unknown> => {
-        try { return await operation() } catch (error) { return { error: errorText(error) } }
-      }
-      sendJson(res, 200, {
-        ok: true,
-        hostBuild: 'auto-bind-1',
-        list: presets.list === undefined ? null : await safe(() => presets.list!()),
-        roster: presets.remoteExportList === undefined ? null : await safe(() => presets.remoteExportList!()),
-        inspectDefault: presets.inspectCompositions === undefined
-          ? null
-          : await safe(() => presets.inspectCompositions!()),
-        inspectRoot: presets.inspectCompositions === undefined
-          ? null
-          : await safe(() => presets.inspectCompositions!(this.ctx)),
-      })
-    } catch (error) {
-      this.fail(res, error)
-    }
-  }
-
   /** Answer one failed tavern request with the closest status category. */
   private fail(res: ServerResponse, error: unknown): void {
     if (error instanceof HttpRequestError) {

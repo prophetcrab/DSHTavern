@@ -17,7 +17,6 @@
   },
   "include": [
     "src/index.ts",
-    "src/session.ts",
     "src/stats/index.ts",
     "src/tracker/index.ts",
     "src/image/index.ts",
