@@ -48,12 +48,12 @@
       },
       "versions": [
         {
-          "version": "0.3.0",
-          "publishTimestamp": 1792894613,
+          "version": "0.4.0",
+          "publishTimestamp": 1793010770,
           "source": {
             "type": "git",
             "url": "https://github.com/prophetcrab/DSHTavern",
-            "commit": "534c996bf2857ad77680a780c0cb1a24fe7380d5"
+            "commit": "9d618ccc327b27bedb74e7763a7a5d68d7b7e3c3"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
